@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Build, ECR, Terraform & ECS Deploy)
+name: CI/CD Pipeline (Build, ECR, Docker Hub, Terraform & ECS Deploy)
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   ci-cd-pipeline:
-    name: Build, Test, ECR Push & Terraform ECS Deploy
+    name: Build, Test, Push (ECR & Docker Hub) & Terraform ECS Deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -58,8 +58,60 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      # ─── Option A: Push to Docker Hub (if DOCKERHUB_USERNAME & DOCKERHUB_TOKEN secrets exist) ───
+      - name: Log in to Docker Hub
+        if: github.ref == 'refs/heads/main' && env.DOCKERHUB_USER != ''
+        uses: docker/login-action@v2
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push Images to Docker Hub
+        if: github.ref == 'refs/heads/main' && env.DOCKERHUB_USER != ''
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        run: |
+          echo "Building & pushing images to Docker Hub for user $DOCKERHUB_USER..."
+          docker build -t $DOCKERHUB_USER/ticketdesk-frontend:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-frontend:latest ./frontend
+          docker push $DOCKERHUB_USER/ticketdesk-frontend:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-frontend:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-api-gateway:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-api-gateway:latest ./backend/api-gateway
+          docker push $DOCKERHUB_USER/ticketdesk-api-gateway:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-api-gateway:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-auth-service:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-auth-service:latest ./backend/auth-service
+          docker push $DOCKERHUB_USER/ticketdesk-auth-service:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-auth-service:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-ticket-service:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-ticket-service:latest ./backend/ticket-service
+          docker push $DOCKERHUB_USER/ticketdesk-ticket-service:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-ticket-service:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-comment-service:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-comment-service:latest ./backend/comment-service
+          docker push $DOCKERHUB_USER/ticketdesk-comment-service:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-comment-service:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-attachment-service:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-attachment-service:latest ./backend/attachment-service
+          docker push $DOCKERHUB_USER/ticketdesk-attachment-service:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-attachment-service:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-dashboard-service:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-dashboard-service:latest ./backend/dashboard-service
+          docker push $DOCKERHUB_USER/ticketdesk-dashboard-service:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-dashboard-service:latest
+
+          docker build -t $DOCKERHUB_USER/ticketdesk-eureka-server:$IMAGE_TAG -t $DOCKERHUB_USER/ticketdesk-eureka-server:latest ./backend/eureka-server
+          docker push $DOCKERHUB_USER/ticketdesk-eureka-server:$IMAGE_TAG
+          docker push $DOCKERHUB_USER/ticketdesk-eureka-server:latest
+
+      # ─── Option B: Push to Amazon ECR & Deploy via Terraform (AWS Flow) ───
       - name: Configure AWS Credentials
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -67,17 +119,18 @@ jobs:
           aws-region: us-east-1
 
       - name: Log in to Amazon ECR
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
       - name: Build & Push Docker Images to ECR
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != '' && steps.login-ecr.outputs.registry != ''
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
         run: |
-          # Build & Push containers tagged with Git commit SHA
           docker build -t $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG ./frontend
           docker push $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG
 
@@ -102,16 +155,18 @@ jobs:
           docker build -t $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG ./backend/eureka-server
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
 
-          echo "Successfully pushed all containers to Amazon ECR with tag $IMAGE_TAG"
-
       - name: Setup Terraform
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.5.0
 
       - name: Terraform Init & Apply
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         working-directory: ./terraform
         run: |
           terraform init
@@ -119,6 +174,8 @@ jobs:
           terraform apply -auto-approve tfplan
 
       - name: Force New ECS Deployment (Update Service)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
         run: |
           aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-api-service --force-new-deployment || true
