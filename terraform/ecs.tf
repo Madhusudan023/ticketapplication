@@ -50,24 +50,27 @@ resource "aws_cloudwatch_log_group" "ecs" {
   retention_in_days = 7
 }
 
-resource "aws_ecs_task_definition" "api" {
-  family                   = "${var.project_name}-api-task"
+# ─────────────────────────────────────────────────────────────
+#  EUREKA SERVER — ECS FARGATE TASK DEFINITION
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "eureka" {
+  family                   = "${var.project_name}-eureka-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"
-  memory                   = "512"
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
-      name      = "api-gateway"
-      image     = "nginx:alpine" # Placeholder. Replace with your actual ECR image during deployment.
+      name      = "eureka-server"
+      image     = "poojapentela1803/ticketdesk-eureka-server:latest"
       essential = true
       portMappings = [
         {
-          containerPort = var.container_port
-          hostPort      = var.container_port
+          containerPort = 8761
+          hostPort      = 8761
         }
       ]
       logConfiguration = {
@@ -75,30 +78,33 @@ resource "aws_ecs_task_definition" "api" {
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
           "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "api"
+          "awslogs-stream-prefix" = "eureka"
         }
       }
     }
   ])
 }
 
-resource "aws_ecs_service" "api" {
-  name            = "${var.project_name}-api-service"
+# ─────────────────────────────────────────────────────────────
+#  EUREKA SERVER — ECS FARGATE SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_service" "eureka" {
+  name            = "${var.project_name}-eureka-service"
   cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.api.arn
+  task_definition = aws_ecs_task_definition.eureka.arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.api.arn
-    container_name   = "api-gateway"
-    container_port   = var.container_port
+    target_group_arn = aws_lb_target_group.eureka.arn
+    container_name   = "eureka-server"
+    container_port   = 8761
   }
 
   depends_on = [aws_lb_listener.http]
