@@ -15,3 +15,15 @@ variable "container_port" {
   type        = number
   default     = 8080
 }
+
+variable "db_username" {
+  description = "Database master username"
+  type        = string
+  default     = "admin"
+}
+
+variable "image_tag" {
+  description = "Docker image tag (Git commit SHA)"
+  type        = string
+  default     = "latest"
+}
