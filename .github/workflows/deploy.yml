@@ -128,29 +128,37 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
         run: |
-          docker build -t $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG ./frontend
+          docker build -t $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-frontend:latest ./frontend
           docker push $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-frontend:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-api-gateway:$IMAGE_TAG ./backend/api-gateway
+          docker build -t $ECR_REGISTRY/ticketdesk-api-gateway:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-api-gateway:latest ./backend/api-gateway
           docker push $ECR_REGISTRY/ticketdesk-api-gateway:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-api-gateway:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-auth-service:$IMAGE_TAG ./backend/auth-service
+          docker build -t $ECR_REGISTRY/ticketdesk-auth-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-auth-service:latest ./backend/auth-service
           docker push $ECR_REGISTRY/ticketdesk-auth-service:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-auth-service:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-ticket-service:$IMAGE_TAG ./backend/ticket-service
+          docker build -t $ECR_REGISTRY/ticketdesk-ticket-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-ticket-service:latest ./backend/ticket-service
           docker push $ECR_REGISTRY/ticketdesk-ticket-service:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-ticket-service:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-comment-service:$IMAGE_TAG ./backend/comment-service
+          docker build -t $ECR_REGISTRY/ticketdesk-comment-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-comment-service:latest ./backend/comment-service
           docker push $ECR_REGISTRY/ticketdesk-comment-service:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-comment-service:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-attachment-service:$IMAGE_TAG ./backend/attachment-service
+          docker build -t $ECR_REGISTRY/ticketdesk-attachment-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-attachment-service:latest ./backend/attachment-service
           docker push $ECR_REGISTRY/ticketdesk-attachment-service:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-attachment-service:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-dashboard-service:$IMAGE_TAG ./backend/dashboard-service
+          docker build -t $ECR_REGISTRY/ticketdesk-dashboard-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-dashboard-service:latest ./backend/dashboard-service
           docker push $ECR_REGISTRY/ticketdesk-dashboard-service:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-dashboard-service:latest
 
-          docker build -t $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG ./backend/eureka-server
+          docker build -t $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-eureka-server:latest ./backend/eureka-server
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
+          docker push $ECR_REGISTRY/ticketdesk-eureka-server:latest
 
       - name: Setup Terraform
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''

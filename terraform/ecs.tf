@@ -65,7 +65,7 @@ resource "aws_ecs_task_definition" "eureka" {
   container_definitions = jsonencode([
     {
       name      = "eureka-server"
-      image     = "poojapentela1803/ticketdesk-eureka-server:latest"
+      image     = "${aws_ecr_repository.eureka_server.repository_url}:latest"
       essential = true
       portMappings = [
         {

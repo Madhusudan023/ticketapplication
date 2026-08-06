@@ -1,3 +1,16 @@
+resource "aws_ecr_repository" "eureka_server" {
+  name                 = "${var.project_name}-eureka-server"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "${var.project_name}-eureka-server-ecr"
+  }
+}
+
 resource "aws_ecr_repository" "frontend" {
   name                 = "${var.project_name}-frontend"
   image_tag_mutability = "MUTABLE"
