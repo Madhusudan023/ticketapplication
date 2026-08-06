@@ -12,6 +12,10 @@ jobs:
   ci-cd-pipeline:
     name: Build, Test, Push (ECR & Docker Hub) & Terraform ECS Deploy
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USER }}
+      DOCKERHUB_PASS: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_PASSWORD }}
+      AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
     steps:
       - name: Checkout Code
@@ -60,16 +64,15 @@ jobs:
 
       # ─── Option A: Push to Docker Hub (if DOCKERHUB_USERNAME secret exists) ───
       - name: Log in to Docker Hub
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != ''
+        if: github.ref == 'refs/heads/main' && env.DOCKERHUB_USER != ''
         uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USER }}
+          password: ${{ env.DOCKERHUB_PASS }}
 
       - name: Build & Push Images to Docker Hub
-        if: github.ref == 'refs/heads/main' && secrets.DOCKERHUB_USERNAME != ''
+        if: github.ref == 'refs/heads/main' && env.DOCKERHUB_USER != ''
         env:
-          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
         run: |
           echo "Building & pushing images to Docker Hub for user $DOCKERHUB_USER..."
@@ -107,7 +110,7 @@ jobs:
 
       # ─── Option B: Push to Amazon ECR & Deploy via Terraform (if AWS_ACCESS_KEY_ID secret exists) ───
       - name: Configure AWS Credentials
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -115,12 +118,12 @@ jobs:
           aws-region: us-east-1
 
       - name: Log in to Amazon ECR
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
       - name: Build & Push Docker Images to ECR
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != '' && steps.login-ecr.outputs.registry != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != '' && steps.login-ecr.outputs.registry != ''
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
@@ -150,13 +153,13 @@ jobs:
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
 
       - name: Setup Terraform
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.5.0
 
       - name: Terraform Init & Apply
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           terraform init
@@ -164,6 +167,6 @@ jobs:
           terraform apply -auto-approve tfplan
 
       - name: Force New ECS Deployment (Update Service)
-        if: github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != ''
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
           aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --force-new-deployment || true
