@@ -1,11 +1,11 @@
-name: Destroy AWS Infrastructure (Terraform Destroy)
+name: Destroy AWS Infrastructure (Terraform & AWS CLI Force Destroy)
 
 on:
   workflow_dispatch:
 
 jobs:
   destroy:
-    name: Terraform Destroy
+    name: Force Destroy All AWS Resources
     runs-on: ubuntu-latest
 
     env:
@@ -33,5 +33,36 @@ jobs:
         if: env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
-          terraform init
-          terraform destroy -auto-approve
+          terraform init || true
+          terraform destroy -auto-approve || true
+
+      - name: Force Delete All AWS Resources via AWS CLI
+        if: env.AWS_KEY != ''
+        run: |
+          echo "Force deleting ECS Services & Cluster..."
+          aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --desired-count 0 || true
+          aws ecs delete-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --force || true
+          aws ecs delete-cluster --cluster ticketdesk-cluster || true
+
+          echo "Force deleting ECR Repositories..."
+          repos=$(aws ecr describe-repositories --query 'repositories[*].repositoryName' --output text || true)
+          for repo in $repos; do
+            if [[ $repo == ticketdesk* ]]; then
+              echo "Deleting ECR repo: $repo"
+              aws ecr delete-repository --repository-name "$repo" --force || true
+            fi
+          done
+
+          echo "Deleting Load Balancer & Target Groups..."
+          alb_arn=$(aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'ticketdesk')].LoadBalancerArn" --output text || true)
+          if [ -n "$alb_arn" ]; then
+            aws elbv2 delete-load-balancer --load-balancer-arn "$alb_arn" || true
+          fi
+
+          echo "Deleting RDS Database Instance..."
+          aws rds delete-db-instance --db-instance-identifier ticketdesk-db --skip-final-snapshot --delete-automated-backups || true
+
+          echo "Deleting Secrets Manager Secret..."
+          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery || true
+
+          echo "Cleanup completed successfully!"
