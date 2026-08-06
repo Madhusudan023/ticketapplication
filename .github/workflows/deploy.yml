@@ -1,0 +1,80 @@
+name: CI Pipeline (Tests, Secrets Scan, Docker Build)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci-pipeline:
+    name: CI Pipeline (Build & Test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Required for secret scanners to scan commit history
+
+      - name: Scan for Committed Secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false # A failing scan will stop the build
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run Backend Unit Tests (Maven)
+        run: |
+          for dir in backend/*/; do
+            if [ -f "$dir/pom.xml" ]; then
+              echo "Testing $dir..."
+              mvn -file "$dir/pom.xml" test
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run Frontend Build & Verification
+        run: |
+          cd frontend
+          npm ci
+          # Run tests if configured, otherwise skip
+          if npm run | grep -q "test"; then
+            npm test
+          else
+            echo "No test script found in package.json, skipping."
+          fi
+
+      - name: Get Short Git Commit SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & Tag Docker Images Locally
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        run: |
+          # Build images locally to verify Dockerfile compilations
+          docker build -t ticket-frontend:$IMAGE_TAG ./frontend
+          docker build -t ticket-api-gateway:$IMAGE_TAG ./backend/api-gateway
+          docker build -t ticket-eureka-server:$IMAGE_TAG ./backend/eureka-server
+          docker build -t ticket-auth-service:$IMAGE_TAG ./backend/auth-service
+          docker build -t ticket-ticket-service:$IMAGE_TAG ./backend/ticket-service
+          docker build -t ticket-comment-service:$IMAGE_TAG ./backend/comment-service
+          docker build -t ticket-attachment-service:$IMAGE_TAG ./backend/attachment-service
+          docker build -t ticket-dashboard-service:$IMAGE_TAG ./backend/dashboard-service
+          
+          echo "Successfully built and tagged all 8 Docker containers locally with tag $IMAGE_TAG!"
