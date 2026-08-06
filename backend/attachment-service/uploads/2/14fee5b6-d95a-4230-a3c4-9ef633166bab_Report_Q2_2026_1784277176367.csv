@@ -1,3 +1,0 @@
-ID,Event Type,Claim ID,User ID,User Email,User Role,Description,Occurred At
-1,CLAIM_APPROVED,9,2,processor@example.com,CLAIM_PROCESSOR,"Claim Status changed to APPROVED. Note: yes",2026-07-17T13:01:44.707680
-2,CLAIM_APPROVED,10,3,manager@example.com,CLAIM_MANAGER,"Claim Status changed to APPROVED. Note: yeeess",2026-07-17T13:07:27.573213
