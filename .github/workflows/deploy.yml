@@ -1,8 +1,9 @@
-name: Deploy Entire Application (ECS Fargate + ECR + RDS + S3)
+name: Deploy Entire Application
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -18,53 +19,31 @@ jobs:
       # 1. Checkout
       # ─────────────────────────────────────────────────────
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # ─────────────────────────────────────────────────────
-      # 2. Configure AWS from GitHub Secrets
+      # 2. Configure AWS Credentials
       # ─────────────────────────────────────────────────────
       - name: Configure AWS Credentials
         if: env.AWS_KEY != ''
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
       # ─────────────────────────────────────────────────────
-      # 3. Delete STATELESS resources before terraform runs
+      # 3. Pre-Cleanup: Delete ONLY stateless resources
       #    (ALB, TGs, Listeners, SGs, ECS, CW, IAM, RDS subnet group)
-      #    These are safe to delete — terraform will recreate them.
-      #    We KEEP: VPC, RDS instance, ECR repos (stateful data)
+      #    We KEEP: VPC, RDS instance, ECR repos, S3 bucket
       # ─────────────────────────────────────────────────────
-      - name: Delete Conflicting Stateless AWS Resources
+      - name: Pre-Cleanup Stateless Resources
         if: env.AWS_KEY != ''
         run: |
           P="ticketdesk"
           R="us-east-1"
 
-          echo "=== [1/8] Deleting ALB + Listeners + Target Groups ==="
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names ${P}-alb \
-            --query 'LoadBalancers[0].LoadBalancerArn' --output text --region $R 2>/dev/null || echo "")
-          if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
-            echo "Deleting listeners on ALB..."
-            LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
-              --query 'Listeners[*].ListenerArn' --output text --region $R 2>/dev/null || echo "")
-            for L in $LISTENERS; do
-              aws elbv2 delete-listener --listener-arn "$L" --region $R 2>/dev/null || true
-            done
-            echo "Deleting ALB..."
-            aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $R || true
-            sleep 20
-          fi
-          for tg in ${P}-eureka-tg ${P}-gateway-tg; do
-            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" \
-              --query 'TargetGroups[0].TargetGroupArn' --output text --region $R 2>/dev/null || echo "")
-            [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && \
-              aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $R 2>/dev/null || true
-          done
-
-          echo "=== [2/8] Deleting ECS Services + Cluster ==="
+          echo "--- [1] Deleting ECS Services and Cluster ---"
           for svc in ${P}-eureka-service ${P}-gateway-service ${P}-auth-service \
             ${P}-ticket-service ${P}-comment-service ${P}-attachment-service ${P}-dashboard-service; do
             aws ecs update-service --cluster ${P}-cluster --service "$svc" \
@@ -74,46 +53,68 @@ jobs:
           done
           aws ecs delete-cluster --cluster ${P}-cluster --region $R 2>/dev/null || true
 
-          echo "=== [3/8] Deleting Security Groups ==="
-          for sg in ${P}-alb-sg ${P}-ecs-tasks-sg ${P}-rds-sg; do
-            SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$sg" \
+          echo "--- [2] Deleting ALB + Listeners ---"
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names ${P}-alb \
+            --query 'LoadBalancers[0].LoadBalancerArn' --output text --region $R 2>/dev/null || echo "")
+          if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
+            LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+              --query 'Listeners[*].ListenerArn' --output text --region $R 2>/dev/null || echo "")
+            for L in $LISTENERS; do
+              aws elbv2 delete-listener --listener-arn "$L" --region $R 2>/dev/null || true
+            done
+            aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $R 2>/dev/null || true
+            echo "Waiting 25s for ALB deletion..."
+            sleep 25
+          fi
+
+          echo "--- [3] Deleting Target Groups ---"
+          for tg in ${P}-eureka-tg ${P}-gateway-tg; do
+            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" \
+              --query 'TargetGroups[0].TargetGroupArn' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && \
+              aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $R 2>/dev/null || true
+          done
+
+          echo "--- [4] Deleting IAM Roles ---"
+          for role in ${P}-ecs-execution-role ${P}-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" \
+              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for pol in $POLICIES; do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$pol" 2>/dev/null || true
+            done
+            aws iam delete-role --role-name "$role" 2>/dev/null || true
+          done
+
+          echo "--- [5] Deleting Secrets Manager Secret ---"
+          aws secretsmanager delete-secret --secret-id ${P}-db-credentials-v2 \
+            --force-delete-without-recovery --region $R 2>/dev/null || true
+
+          echo "--- [6] Deleting CloudWatch Log Group ---"
+          aws logs delete-log-group --log-group-name "/ecs/${P}" --region $R 2>/dev/null || true
+
+          echo "--- [7] Deleting RDS Subnet Group ---"
+          aws rds delete-db-subnet-group \
+            --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
+
+          echo "--- [8] Deleting Security Groups ---"
+          for sg_name in ${P}-alb-sg ${P}-ecs-tasks-sg ${P}-rds-sg; do
+            SG_ID=$(aws ec2 describe-security-groups \
+              --filters "Name=group-name,Values=$sg_name" \
               --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
             [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && \
               aws ec2 delete-security-group --group-id "$SG_ID" --region $R 2>/dev/null || true
           done
 
-          echo "=== [4/8] Deleting CloudWatch Log Group ==="
-          aws logs delete-log-group --log-group-name "/ecs/${P}" --region $R 2>/dev/null || true
-
-          echo "=== [5/8] Deleting IAM Roles ==="
-          for role in ${P}-ecs-execution-role ${P}-ecs-task-role; do
-            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" \
-              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
-            for p in $POLICIES; do
-              aws iam detach-role-policy --role-name "$role" --policy-arn "$p" 2>/dev/null || true
-            done
-            aws iam delete-role --role-name "$role" 2>/dev/null || true
-          done
-
-          echo "=== [6/8] Deleting RDS Subnet Group (NOT the RDS instance) ==="
-          aws rds delete-db-subnet-group \
-            --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
-
-          echo "=== [7/8] Deleting Secrets Manager Secret ==="
-          aws secretsmanager delete-secret --secret-id ${P}-db-credentials-v2 \
-            --force-delete-without-recovery --region $R 2>/dev/null || true
-
-          echo "=== [8/8] Removing orphaned VPCs (keeping ticketdesk-vpc) ==="
+          echo "--- [9] Remove orphaned VPCs (keep ticketdesk-vpc) ---"
           VPCS=$(aws ec2 describe-vpcs \
-            --query 'Vpcs[?IsDefault==`false`].VpcId' \
-            --output text --region $R 2>/dev/null || echo "")
+            --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region $R 2>/dev/null || echo "")
           for vpc in $VPCS; do
             [ -z "$vpc" ] || [ "$vpc" == "None" ] && continue
             VPC_NAME=$(aws ec2 describe-vpcs --vpc-ids "$vpc" \
               --query 'Vpcs[0].Tags[?Key==`Name`].Value | [0]' \
               --output text --region $R 2>/dev/null || echo "")
             if [ "$VPC_NAME" == "${P}-vpc" ]; then
-              echo "Keeping ${P}-vpc ($vpc) — will import into Terraform."
+              echo "Keeping ${P}-vpc ($vpc)"
               continue
             fi
             echo "Deleting orphaned VPC: $vpc"
@@ -128,14 +129,15 @@ jobs:
               aws ec2 delete-internet-gateway --internet-gateway-id "$IGW" --region $R 2>/dev/null || true
             fi
             SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" \
-              --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region $R 2>/dev/null || echo "")
+              --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+              --output text --region $R 2>/dev/null || echo "")
             for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg" --region $R 2>/dev/null || true; done
             aws ec2 delete-vpc --vpc-id "$vpc" --region $R 2>/dev/null || true
           done
-          echo "=== Pre-cleanup complete! ==="
+          echo "=== Pre-cleanup complete ==="
 
       # ─────────────────────────────────────────────────────
-      # 4. Terraform Init
+      # 4. Terraform Init + Import stateful resources
       # ─────────────────────────────────────────────────────
       - name: Setup Terraform
         if: env.AWS_KEY != ''
@@ -148,24 +150,19 @@ jobs:
         working-directory: ./terraform
         run: terraform init
 
-      # ─────────────────────────────────────────────────────
-      # 5. Import STATEFUL resources (VPC, ECR, RDS instance)
-      #    These must be preserved across runs.
-      # ─────────────────────────────────────────────────────
-      - name: Import Stateful Resources into Terraform State
+      - name: Import Stateful Resources (VPC, ECR, RDS)
         if: env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           P="ticketdesk"
           R="us-east-1"
 
-          echo "=== Importing VPC + Subnets + IGW + Route Tables ==="
+          echo "=== Importing VPC ==="
           VPC_ID=$(aws ec2 describe-vpcs \
             --filters "Name=tag:Name,Values=${P}-vpc" \
             --query 'Vpcs[0].VpcId' --output text --region $R 2>/dev/null || echo "")
-
           if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
-            echo "Found existing VPC: $VPC_ID — importing..."
+            echo "Importing VPC $VPC_ID..."
             terraform import aws_vpc.main "$VPC_ID" 2>/dev/null || true
 
             PUB_SUBNETS=$(aws ec2 describe-subnets \
@@ -190,7 +187,8 @@ jobs:
 
             IGW=$(aws ec2 describe-internet-gateways \
               --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
-              --query 'InternetGateways[0].InternetGatewayId' --output text --region $R 2>/dev/null || echo "")
+              --query 'InternetGateways[0].InternetGatewayId' \
+              --output text --region $R 2>/dev/null || echo "")
             [ -n "$IGW" ] && [ "$IGW" != "None" ] && \
               terraform import aws_internet_gateway.igw "$IGW" 2>/dev/null || true
 
@@ -206,10 +204,10 @@ jobs:
             [ -n "$PRIV_RT" ] && [ "$PRIV_RT" != "None" ] && \
               terraform import aws_route_table.private "$PRIV_RT" 2>/dev/null || true
           else
-            echo "No existing VPC found — Terraform will create a fresh one."
+            echo "No existing VPC — will be created fresh."
           fi
 
-          echo "=== Importing ECR Repositories ==="
+          echo "=== Importing ECR Repos ==="
           for repo in eureka-server frontend api-gateway auth-service \
                       ticket-service comment-service attachment-service dashboard-service; do
             tf_name=$(echo $repo | tr '-' '_')
@@ -224,10 +222,10 @@ jobs:
           [ -n "$RDS" ] && [ "$RDS" != "None" ] && \
             terraform import aws_db_instance.mysql ${P}-db 2>/dev/null || true
 
-          echo "=== Import complete! ==="
+          echo "=== Import complete ==="
 
       # ─────────────────────────────────────────────────────
-      # 6. Terraform Apply
+      # 5. Terraform Apply (create/update all infra)
       # ─────────────────────────────────────────────────────
       - name: Terraform Apply
         if: env.AWS_KEY != ''
@@ -237,23 +235,32 @@ jobs:
           TF_VAR_aws_region: us-east-1
 
       # ─────────────────────────────────────────────────────
-      # 7. Build React Frontend
+      # 6. Get ALB DNS for frontend build
+      # ─────────────────────────────────────────────────────
+      - name: Get ALB DNS Name
+        if: env.AWS_KEY != ''
+        id: alb
+        working-directory: ./terraform
+        run: |
+          ALB=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
+          echo "dns=$ALB" >> $GITHUB_OUTPUT
+          echo "ALB DNS: $ALB"
+
+      # ─────────────────────────────────────────────────────
+      # 7. Build React Frontend with ALB API URL baked in
+      #    Frontend → S3 (served) → calls API Gateway on ALB
       # ─────────────────────────────────────────────────────
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
 
       - name: Build React Frontend
         working-directory: ./frontend
+        env:
+          VITE_API_BASE: http://${{ steps.alb.outputs.dns }}/api/v1
         run: |
-          ALB_HOST=$(cd ../terraform && terraform output -raw alb_dns_name 2>/dev/null || echo "")
-          if [ -n "$ALB_HOST" ] && [ "$ALB_HOST" != "None" ]; then
-            export VITE_API_BASE="http://$ALB_HOST/api/v1"
-            echo "Successfully set VITE_API_BASE=$VITE_API_BASE"
-          else
-            echo "Warning: Could not fetch alb_dns_name output, using fallback."
-          fi
+          echo "Building with VITE_API_BASE=$VITE_API_BASE"
           npm ci
           npm run build
 
@@ -264,20 +271,23 @@ jobs:
             --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" \
             --output text 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
           if [ -n "$BUCKET" ] && [ "$BUCKET" != "None" ]; then
+            echo "Deploying to s3://$BUCKET"
             aws s3 sync frontend/dist "s3://$BUCKET" --delete --region us-east-1
-            echo "Frontend deployed to s3://$BUCKET"
+            echo "Frontend deployed!"
+          else
+            echo "No S3 bucket found — skipping."
           fi
 
       # ─────────────────────────────────────────────────────
-      # 8. Login to ECR & Build/Push Docker Images
+      # 8. Build & Push ALL 8 Docker Images to ECR
       # ─────────────────────────────────────────────────────
       - name: Login to Amazon ECR
         if: env.AWS_KEY != ''
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -289,15 +299,21 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           TAG=$(git rev-parse --short HEAD)
+          echo "Image tag: $TAG"
+
           push_image() {
             local name=$1 ctx=$2
-            echo "--- Building ticketdesk-${name} ---"
+            echo ""
+            echo "========== Building: ticketdesk-${name} =========="
             docker build \
               -t $ECR_REGISTRY/ticketdesk-${name}:${TAG} \
-              -t $ECR_REGISTRY/ticketdesk-${name}:latest ${ctx}
+              -t $ECR_REGISTRY/ticketdesk-${name}:latest \
+              ${ctx}
             docker push $ECR_REGISTRY/ticketdesk-${name}:${TAG}
             docker push $ECR_REGISTRY/ticketdesk-${name}:latest
+            echo "✅ ticketdesk-${name} pushed to ECR"
           }
+
           push_image "eureka-server"      "./backend/eureka-server"
           push_image "api-gateway"        "./backend/api-gateway"
           push_image "auth-service"       "./backend/auth-service"
@@ -308,19 +324,29 @@ jobs:
           push_image "frontend"           "./frontend"
 
       # ─────────────────────────────────────────────────────
-      # 9. Force ECS Redeployment
+      # 9. Force ECS Redeployment (pick up new images)
       # ─────────────────────────────────────────────────────
-      - name: Force ECS Redeployment
+      - name: Force ECS Redeployment (All 7 Services)
         if: env.AWS_KEY != ''
         run: |
-          for svc in ticketdesk-eureka-service ticketdesk-gateway-service \
-            ticketdesk-auth-service ticketdesk-ticket-service \
-            ticketdesk-comment-service ticketdesk-attachment-service \
+          CLUSTER="ticketdesk-cluster"
+          echo "=== Forcing redeployment of all ECS services ==="
+          for svc in \
+            ticketdesk-eureka-service \
+            ticketdesk-gateway-service \
+            ticketdesk-auth-service \
+            ticketdesk-ticket-service \
+            ticketdesk-comment-service \
+            ticketdesk-attachment-service \
             ticketdesk-dashboard-service; do
-            aws ecs update-service --cluster ticketdesk-cluster \
-              --service "$svc" --force-new-deployment --region us-east-1 2>/dev/null || true
+            echo "Redeploying $svc..."
+            aws ecs update-service \
+              --cluster "$CLUSTER" \
+              --service "$svc" \
+              --force-new-deployment \
+              --region us-east-1 2>/dev/null || echo "Warning: $svc not found"
           done
-          echo "=== All ECS services redeployed! ==="
+          echo "=== All services redeployed! ==="
 
       # ─────────────────────────────────────────────────────
       # 10. Print Access URLs
@@ -329,10 +355,17 @@ jobs:
         if: env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
-          echo "=========================================="
-          echo " 🎉 DEPLOYMENT COMPLETE!"
-          echo "=========================================="
-          echo " Frontend  : $(terraform output -raw frontend_s3_url 2>/dev/null || echo 'check S3 bucket')"
-          echo " Eureka    : $(terraform output -raw eureka_dashboard_url 2>/dev/null || echo 'check ALB:8761')"
-          echo " API GW    : $(terraform output -raw api_gateway_url 2>/dev/null || echo 'check ALB:80')"
-          echo "=========================================="
+          ALB=$(terraform output -raw alb_dns_name 2>/dev/null || echo "N/A")
+          FRONT=$(terraform output -raw frontend_s3_url 2>/dev/null || echo "N/A")
+          echo ""
+          echo "======================================================="
+          echo " 🎉  DEPLOYMENT COMPLETE!"
+          echo "======================================================="
+          echo " 🌐  Frontend (S3)  : $FRONT"
+          echo " 🔀  API Gateway    : http://$ALB/api/v1"
+          echo " 🔍  Eureka         : http://$ALB:8761"
+          echo " 🗄️  API Gateway ↔ Frontend: CONNECTED via ALB"
+          echo "======================================================="
+          echo ""
+          echo "📝 NOTE: Set VITE_API_BASE=http://$ALB/api/v1 was baked"
+          echo "   into the frontend build during this deployment."
