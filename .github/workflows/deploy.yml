@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (ECR, ECS Fargate & AWS Deploy)
+name: CI/CD Pipeline (ECR, ECS Fargate, S3 & AWS Deploy)
 
 on:
   push:
@@ -27,6 +27,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Build React Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
 
       - name: Get Short Git Commit SHA
         id: vars
@@ -68,6 +79,17 @@ jobs:
           terraform init
           # If resource already exists in AWS, import or apply gracefully
           terraform apply -auto-approve || true
+
+      - name: Deploy Frontend to S3 Bucket
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        run: |
+          echo "=== Deploying React Frontend to S3 Bucket ==="
+          BUCKET_NAME=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" --output text --region us-east-1 || echo "")
+          if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ] && [ -d "frontend/dist" ]; then
+            echo "Syncing frontend/dist to s3://$BUCKET_NAME..."
+            aws s3 sync frontend/dist "s3://$BUCKET_NAME" --delete --region us-east-1
+            echo "Frontend deployed successfully to S3!"
+          fi
 
       - name: Log in to Amazon ECR
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
