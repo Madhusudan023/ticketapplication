@@ -1,20 +1,21 @@
 resource "random_password" "db_password" {
   length  = 16
   special = false
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "aws_secretsmanager_secret" "db_secret" {
   name        = "${var.project_name}-db-credentials-v2"
   description = "RDS MySQL Database credentials for TicketDesk"
 
-  # If the secret already exists in AWS, ignore it — don't fail
   lifecycle {
-    ignore_changes = [name]
+    ignore_changes = all
   }
 
-  tags = {
-    Name = "${var.project_name}-db-secret"
-  }
+  tags = { Name = "${var.project_name}-db-secret" }
 }
 
 resource "aws_secretsmanager_secret_version" "db_secret_val" {
@@ -24,9 +25,8 @@ resource "aws_secretsmanager_secret_version" "db_secret_val" {
     password = random_password.db_password.result
   })
 
-  # Don't update the secret value if it already exists (password was set on first run)
   lifecycle {
-    ignore_changes = [secret_string]
+    ignore_changes = all
   }
 }
 
@@ -34,9 +34,11 @@ resource "aws_db_subnet_group" "main" {
   name       = "${var.project_name}-db-subnet-group"
   subnet_ids = aws_subnet.private[*].id
 
-  tags = {
-    Name = "${var.project_name}-db-subnet-group"
+  lifecycle {
+    ignore_changes = all
   }
+
+  tags = { Name = "${var.project_name}-db-subnet-group" }
 }
 
 resource "aws_db_instance" "mysql" {
@@ -54,12 +56,9 @@ resource "aws_db_instance" "mysql" {
   skip_final_snapshot    = true
   publicly_accessible    = false
 
-  # If RDS already exists, don't try to change password — it won't match the new random one
   lifecycle {
-    ignore_changes = [password, engine_version]
+    ignore_changes = all
   }
 
-  tags = {
-    Name = "${var.project_name}-rds-mysql"
-  }
+  tags = { Name = "${var.project_name}-rds-mysql" }
 }
