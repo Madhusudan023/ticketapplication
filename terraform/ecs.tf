@@ -120,7 +120,7 @@ resource "aws_ecs_service" "eureka" {
     container_name   = "eureka-server"
     container_port   = 8761
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy]
 }
 
@@ -162,7 +162,7 @@ resource "aws_ecs_service" "api_gateway" {
     container_name   = "api-gateway"
     container_port   = 8080
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.api_gateway, aws_ecs_service.eureka]
 }
 
@@ -203,7 +203,7 @@ resource "aws_ecs_service" "auth_service" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
@@ -244,7 +244,7 @@ resource "aws_ecs_service" "ticket_service" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
@@ -285,7 +285,7 @@ resource "aws_ecs_service" "comment_service" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
@@ -326,7 +326,7 @@ resource "aws_ecs_service" "attachment_service" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
@@ -367,6 +367,6 @@ resource "aws_ecs_service" "dashboard_service" {
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
-  lifecycle { ignore_changes = [task_definition, desired_count] }
+  lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
