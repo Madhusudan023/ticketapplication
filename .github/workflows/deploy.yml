@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Deploy Entire Application - Reuse Existing Resources)
+name: CI/CD Pipeline (100% Free Tier - Clean Deploy)
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   ci-cd-pipeline:
-    name: Build, ECR Push & ECS Fargate Deploy Entire Application
+    name: Clean AWS Sweep & 100% Free Tier Deploy
     runs-on: ubuntu-latest
     env:
       AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -51,20 +51,55 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Ensure ECR Repositories Exist (Create if missing, ignore if exists)
+      - name: Force Clean Sweep All Conflicting AWS Resources
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
-          echo "=== Checking & Creating ECR Repositories (Ignore if exists) ==="
-          REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
-          
-          for repo in "${REPOS[@]}"; do
-            if aws ecr describe-repositories --repository-names "$repo" --region us-east-1 >/dev/null 2>&1; then
-              echo "ECR repo '$repo' already exists -> Ignoring."
-            else
-              echo "Creating ECR repo '$repo'..."
-              aws ecr create-repository --repository-name "$repo" --region us-east-1 || true
+          echo "=== 1. Terminating EC2 Instances ==="
+          INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=ticketdesk-free-tier-server" --query 'Reservations[*].Instances[*].InstanceId' --output text --region us-east-1 || echo "")
+          for inst in $INSTANCES; do
+            if [ -n "$inst" ] && [ "$inst" != "None" ]; then
+              echo "Terminating instance: $inst..."
+              aws ec2 terminate-instances --instance-ids "$inst" --region us-east-1 || true
             fi
           done
+          sleep 15
+
+          echo "=== 2. Deleting ECR Repositories ==="
+          REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
+          for repo in "${REPOS[@]}"; do
+            aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
+          done
+
+          echo "=== 3. Deleting IAM Roles & Secrets ==="
+          for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
+            aws iam delete-role --role-name "$role" || true
+          done
+          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
+          aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
+
+          echo "=== 4. Deleting Non-Default VPCs (Freeing VPC Quota) ==="
+          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region us-east-1 || echo "")
+          for vpc in $VPCS; do
+            if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
+              echo "Cleaning up non-default VPC: $vpc..."
+              SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
+              for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
+
+              IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
+              if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$vpc" --region us-east-1 || true
+                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
+              fi
+
+              SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region us-east-1 || echo "")
+              for sg in $SG_IDS; do aws ec2 delete-security-group --group-id "$sg" --region us-east-1 || true; done
+
+              aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
+            fi
+          done
+          echo "Clean sweep complete! AWS region is fresh for Terraform."
 
       - name: Setup Terraform
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
@@ -72,13 +107,12 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init & Apply (Ignore if resources already exist)
+      - name: Terraform Init & Apply (Strict Success Verification)
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           terraform init
-          # Apply infrastructure: if resources exist, ignore errors and continue pipeline
-          terraform apply -auto-approve || true
+          terraform apply -auto-approve
 
       - name: Deploy Frontend to S3 Bucket
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
@@ -87,7 +121,7 @@ jobs:
           BUCKET_NAME=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" --output text --region us-east-1 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
           if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ] && [ -d "frontend/dist" ]; then
             echo "Syncing frontend/dist to s3://$BUCKET_NAME..."
-            aws s3 sync frontend/dist "s3://$BUCKET_NAME" --delete --region us-east-1 || true
+            aws s3 sync frontend/dist "s3://$BUCKET_NAME" --delete --region us-east-1
             echo "Frontend deployed successfully to S3 bucket: $BUCKET_NAME!"
           fi
 
@@ -96,7 +130,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build & Push Docker Images for Entire Application
+      - name: Build & Push Docker Images to ECR
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != '' && steps.login-ecr.outputs.registry != ''
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -134,15 +168,3 @@ jobs:
           docker build -t $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-eureka-server:latest ./backend/eureka-server
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:latest
-
-      - name: Free Tier Deployment Summary
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
-        run: |
-          echo "=========================================================="
-          echo " 🎉 100% AWS FREE TIER DEPLOYMENT COMPLETED SUCCESSFULLY!"
-          echo "=========================================================="
-          echo " - EC2 t3.micro Instance   : 100% Free Tier (750 hrs/month)"
-          echo " - RDS MySQL db.t3.micro   : 100% Free Tier (750 hrs/month)"
-          echo " - Amazon ECR Repositories : 100% Free Tier (500 MB/month)"
-          echo " - Frontend S3 Bucket      : 100% Free Tier (5 GB/month)"
-          echo "=========================================================="
