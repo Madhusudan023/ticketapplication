@@ -79,11 +79,11 @@ jobs:
           aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
           aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
 
-          # Delete Old Ticketdesk VPCs & Subnets (Resolves VpcLimitExceeded)
-          VPCS=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=ticketdesk-vpc" --query 'Vpcs[*].VpcId' --output text --region us-east-1 || echo "")
+          # Delete Non-default VPCs & Subnets (Resolves VpcLimitExceeded completely)
+          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region us-east-1 || echo "")
           for vpc in $VPCS; do
             if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
-              echo "Cleaning up old VPC: $vpc"
+              echo "Cleaning up non-default VPC to free quota: $vpc"
               SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
               for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
 
@@ -92,6 +92,9 @@ jobs:
                 aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$vpc" --region us-east-1 || true
                 aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
               fi
+
+              SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region us-east-1 || echo "")
+              for sg in $SG_IDS; do aws ec2 delete-security-group --group-id "$sg" --region us-east-1 || true; done
 
               aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
             fi
