@@ -3,9 +3,14 @@ output "alb_dns_name" {
   value       = aws_lb.main.dns_name
 }
 
-output "cloudfront_domain_name" {
-  description = "Domain name of CloudFront distribution for Frontend"
-  value       = aws_cloudfront_distribution.frontend.domain_name
+output "eureka_url" {
+  description = "Eureka Dashboard URL via ALB"
+  value       = "http://${aws_lb.main.dns_name}:8761"
+}
+
+output "frontend_s3_url" {
+  description = "Frontend S3 website URL"
+  value       = "http://${aws_s3_bucket_website_configuration.frontend.website_endpoint}"
 }
 
 output "rds_endpoint" {
@@ -21,6 +26,7 @@ output "secretsmanager_secret_arn" {
 output "ecr_repository_urls" {
   description = "ECR Repository URLs for containers"
   value = {
+    eureka_server      = aws_ecr_repository.eureka_server.repository_url
     frontend           = aws_ecr_repository.frontend.repository_url
     api_gateway        = aws_ecr_repository.api_gateway.repository_url
     auth_service       = aws_ecr_repository.auth_service.repository_url
