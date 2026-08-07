@@ -29,8 +29,6 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
-}
-
 resource "aws_db_instance" "mysql" {
   identifier             = "${var.project_name}-db"
   allocated_storage      = 20
