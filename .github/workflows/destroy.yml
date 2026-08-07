@@ -23,14 +23,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Terminate EC2 Instances
+        if: env.AWS_KEY != ''
+        run: |
+          echo "=== Terminating EC2 Instances ==="
+          INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=ticketdesk-free-tier-server" --query 'Reservations[*].Instances[*].InstanceId' --output text --region us-east-1 || echo "")
+          for inst in $INSTANCES; do
+            if [ -n "$inst" ] && [ "$inst" != "None" ]; then
+              echo "Terminating EC2 Instance: $inst..."
+              aws ec2 terminate-instances --instance-ids "$inst" --region us-east-1 || true
+            fi
+          done
+          echo "EC2 termination initiated."
+
       - name: Delete ECS Services & Cluster
         if: env.AWS_KEY != ''
         run: |
           echo "=== Deleting ECS Services ==="
           aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --desired-count 0 --region us-east-1 || true
-          sleep 10
           aws ecs delete-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --force --region us-east-1 || true
-          sleep 5
           aws ecs delete-cluster --cluster ticketdesk-cluster --region us-east-1 || true
           echo "ECS done."
 
@@ -40,14 +51,11 @@ jobs:
           echo "=== Deleting Load Balancers ==="
           ALB_ARN=$(aws elbv2 describe-load-balancers --names ticketdesk-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text --region us-east-1 2>/dev/null || echo "")
           if [ "$ALB_ARN" != "" ] && [ "$ALB_ARN" != "None" ]; then
-            echo "Deleting listeners on ALB..."
             LISTENER_ARNS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --query 'Listeners[*].ListenerArn' --output text --region us-east-1 || echo "")
             for L in $LISTENER_ARNS; do aws elbv2 delete-listener --listener-arn "$L" --region us-east-1 || true; done
-            echo "Deleting ALB..."
             aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region us-east-1 || true
-            sleep 15
+            sleep 10
           fi
-          echo "Deleting Target Groups..."
           TG_ARN=$(aws elbv2 describe-target-groups --names ticketdesk-eureka-tg --query 'TargetGroups[0].TargetGroupArn' --output text --region us-east-1 2>/dev/null || echo "")
           if [ "$TG_ARN" != "" ] && [ "$TG_ARN" != "None" ]; then
             aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region us-east-1 || true
@@ -59,7 +67,6 @@ jobs:
         run: |
           echo "=== Deleting ECR Repositories ==="
           for repo in ticketdesk-eureka-server ticketdesk-frontend ticketdesk-api-gateway ticketdesk-auth-service ticketdesk-ticket-service ticketdesk-comment-service ticketdesk-attachment-service ticketdesk-dashboard-service; do
-            echo "Deleting ECR repo: $repo"
             aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
           done
           echo "ECR done."
@@ -69,35 +76,25 @@ jobs:
         run: |
           echo "=== Deleting IAM Roles ==="
           for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
-            echo "Detaching policies from $role..."
             POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
             for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
-            echo "Deleting role $role..."
             aws iam delete-role --role-name "$role" || true
           done
           echo "IAM done."
 
-      - name: Delete CloudWatch Log Group
+      - name: Delete CloudWatch Log Group & Secrets
         if: env.AWS_KEY != ''
         run: |
-          echo "=== Deleting CloudWatch Log Group ==="
+          echo "=== Deleting CloudWatch Logs & Secrets ==="
           aws logs delete-log-group --log-group-name "/ecs/ticketdesk" --region us-east-1 || true
-          echo "CloudWatch done."
-
-      - name: Delete Secrets Manager Secret
-        if: env.AWS_KEY != ''
-        run: |
-          echo "=== Deleting Secrets Manager Secret ==="
           aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
-          echo "Secrets Manager done."
+          echo "Logs & Secrets done."
 
       - name: Delete RDS Instance & Subnet Group
         if: env.AWS_KEY != ''
         run: |
           echo "=== Deleting RDS Instance ==="
           aws rds delete-db-instance --db-instance-identifier ticketdesk-db --skip-final-snapshot --delete-automated-backups --region us-east-1 || true
-          echo "Waiting 60s for RDS to stop..."
-          sleep 60
           aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
           echo "RDS done."
 
@@ -105,53 +102,35 @@ jobs:
         if: env.AWS_KEY != ''
         run: |
           echo "=== Deleting Security Groups ==="
-          for sg_name in ticketdesk-ecs-tasks-sg ticketdesk-alb-sg ticketdesk-rds-sg; do
+          for sg_name in ticketdesk-ec2-sg ticketdesk-ecs-tasks-sg ticketdesk-alb-sg ticketdesk-rds-sg; do
             SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$sg_name" --query 'SecurityGroups[0].GroupId' --output text --region us-east-1 2>/dev/null || echo "")
             if [ "$SG_ID" != "" ] && [ "$SG_ID" != "None" ]; then
-              echo "Deleting security group $sg_name ($SG_ID)..."
               aws ec2 delete-security-group --group-id "$SG_ID" --region us-east-1 || true
             fi
           done
           echo "Security groups done."
 
-      - name: Delete VPC Resources (Subnets, IGW, NAT, Route Tables, EIP, VPC)
+      - name: Delete All Non-Default VPCs (Clean Slate)
         if: env.AWS_KEY != ''
         run: |
-          echo "=== Deleting VPC Resources ==="
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=ticketdesk-vpc" --query 'Vpcs[0].VpcId' --output text --region us-east-1 2>/dev/null || echo "")
-          if [ "$VPC_ID" != "" ] && [ "$VPC_ID" != "None" ]; then
-            echo "Found VPC: $VPC_ID"
+          echo "=== Deleting Non-Default VPCs ==="
+          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region us-east-1 || echo "")
+          for vpc in $VPCS; do
+            if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
+              echo "Deleting non-default VPC: $vpc"
+              SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
+              for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
 
-            # Delete NAT Gateways
-            NAT_IDS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" --query 'NatGateways[*].NatGatewayId' --output text --region us-east-1 || echo "")
-            for nat in $NAT_IDS; do aws ec2 delete-nat-gateway --nat-gateway-id "$nat" --region us-east-1 || true; done
-            if [ -n "$NAT_IDS" ]; then echo "Waiting 30s for NAT deletion..."; sleep 30; fi
+              IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
+              if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$vpc" --region us-east-1 || true
+                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
+              fi
 
-            # Release Elastic IPs
-            EIP_ALLOC=$(aws ec2 describe-addresses --filters "Name=domain,Values=vpc" --query 'Addresses[*].AllocationId' --output text --region us-east-1 || echo "")
-            for eip in $EIP_ALLOC; do aws ec2 release-address --allocation-id "$eip" --region us-east-1 || true; done
-
-            # Delete Subnets
-            SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
-            for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
-
-            # Detach & Delete Internet Gateway
-            IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
-            if [ "$IGW_ID" != "" ] && [ "$IGW_ID" != "None" ]; then
-              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" --region us-east-1 || true
-              aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
+              aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
             fi
-
-            # Delete Route Tables (non-main)
-            RT_IDS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query 'RouteTables[?Associations[0].Main!=`true`].RouteTableId' --output text --region us-east-1 || echo "")
-            for rt in $RT_IDS; do aws ec2 delete-route-table --route-table-id "$rt" --region us-east-1 || true; done
-
-            # Delete VPC
-            aws ec2 delete-vpc --vpc-id "$VPC_ID" --region us-east-1 || true
-            echo "VPC $VPC_ID deleted."
-          else
-            echo "No ticketdesk VPC found, skipping."
-          fi
+          done
+          echo "VPCs done."
 
       - name: Delete S3 Bucket
         if: env.AWS_KEY != ''
@@ -166,4 +145,4 @@ jobs:
           echo "S3 done."
 
       - name: Done
-        run: echo "All AWS resources have been force deleted successfully!"
+        run: echo "🎉 ALL AWS RESOURCES HAVE BEEN FORCE DELETED SUCCESSFULLY!"
