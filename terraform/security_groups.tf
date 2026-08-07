@@ -31,10 +31,6 @@ resource "aws_security_group" "alb_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  lifecycle {
-    ignore_changes = all
-  }
-
   tags = { Name = "${var.project_name}-alb-sg" }
 }
 
@@ -64,16 +60,12 @@ resource "aws_security_group" "ecs_tasks" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  lifecycle {
-    ignore_changes = all
-  }
-
   tags = { Name = "${var.project_name}-ecs-tasks-sg" }
 }
 
 resource "aws_security_group" "rds_sg" {
   name        = "${var.project_name}-rds-sg"
-  description = "Allow MySQL traffic from ECS tasks only"
+  description = "Allow MySQL traffic from ECS tasks and VPC"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -83,15 +75,18 @@ resource "aws_security_group" "rds_sg" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  lifecycle {
-    ignore_changes = all
   }
 
   tags = { Name = "${var.project_name}-rds-sg" }

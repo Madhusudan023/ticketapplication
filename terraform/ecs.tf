@@ -140,7 +140,7 @@ resource "aws_ecs_task_definition" "api_gateway" {
     image     = "${aws_ecr_repository.api_gateway.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
-    environment = [{ name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url }]
+    environment = local.eureka_env
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "api-gateway" }) }
   }])
 }
