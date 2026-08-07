@@ -1,16 +1,16 @@
-output "ec2_public_ip" {
-  description = "Public IP of the Free Tier EC2 Instance"
-  value       = aws_instance.app_server.public_ip
+output "alb_dns_name" {
+  description = "DNS name of the Application Load Balancer"
+  value       = aws_lb.main.dns_name
 }
 
-output "free_tier_eureka_url" {
-  description = "Eureka Dashboard URL on Free Tier EC2"
-  value       = "http://${aws_instance.app_server.public_ip}:8761"
+output "eureka_url" {
+  description = "Eureka Dashboard URL via ALB"
+  value       = "http://${aws_lb.main.dns_name}:8761"
 }
 
-output "free_tier_api_gateway_url" {
-  description = "API Gateway URL on Free Tier EC2"
-  value       = "http://${aws_instance.app_server.public_ip}:8080"
+output "api_gateway_url" {
+  description = "API Gateway URL via ALB"
+  value       = "http://${aws_lb.main.dns_name}:8080"
 }
 
 output "frontend_s3_url" {
