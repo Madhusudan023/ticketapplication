@@ -51,20 +51,53 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Ensure ECR Repositories Exist (Create if missing, ignore if exists)
+      - name: Pre-Cleanup Existing Resources (Prevents VpcLimit & AlreadyExists Errors)
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
-          echo "=== Ensuring ECR Repositories Exist ==="
-          REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
+          echo "=== Pre-Cleanup: Removing conflicting existing resources ==="
           
+          # Delete ECS Services & Cluster
+          aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --desired-count 0 --region us-east-1 || true
+          aws ecs delete-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --force --region us-east-1 || true
+          aws ecs delete-cluster --cluster ticketdesk-cluster --region us-east-1 || true
+
+          # Delete ECR Repositories
+          REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
           for repo in "${REPOS[@]}"; do
-            if aws ecr describe-repositories --repository-names "$repo" --region us-east-1 >/dev/null 2>&1; then
-              echo "ECR repository '$repo' already exists. Ignoring creation."
-            else
-              echo "Creating ECR repository '$repo'..."
-              aws ecr create-repository --repository-name "$repo" --region us-east-1
+            aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
+          done
+
+          # Delete IAM Roles
+          for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
+            aws iam delete-role --role-name "$role" || true
+          done
+
+          # Delete CloudWatch Log Group & Secrets Manager Secret
+          aws logs delete-log-group --log-group-name "/ecs/ticketdesk" --region us-east-1 || true
+          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
+          aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
+
+          # Delete Old Ticketdesk VPCs & Subnets (Resolves VpcLimitExceeded)
+          VPCS=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=ticketdesk-vpc" --query 'Vpcs[*].VpcId' --output text --region us-east-1 || echo "")
+          for vpc in $VPCS; do
+            if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
+              echo "Cleaning up old VPC: $vpc"
+              SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
+              for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
+
+              IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
+              if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$vpc" --region us-east-1 || true
+                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
+              fi
+
+              aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
             fi
           done
+
+          echo "Pre-cleanup complete! AWS account is clean for Terraform."
 
       - name: Setup Terraform
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
@@ -72,13 +105,12 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init & Apply (Graceful Handling)
+      - name: Terraform Init & Apply
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           terraform init
-          # If resource already exists in AWS, import or apply gracefully
-          terraform apply -auto-approve || true
+          terraform apply -auto-approve
 
       - name: Deploy Frontend to S3 Bucket
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
