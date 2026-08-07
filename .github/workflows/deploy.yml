@@ -238,6 +238,25 @@ jobs:
           DBSN=$(aws rds describe-db-subnet-groups --db-subnet-group-name ${P}-db-subnet-group --query 'DBSubnetGroups[0].DBSubnetGroupName' --output text --region $R 2>/dev/null || echo "")
           [ -n "$DBSN" ] && [ "$DBSN" != "None" ] && terraform import aws_db_subnet_group.main ${P}-db-subnet-group 2>/dev/null || true
 
+          echo "=== Importing S3 Frontend Bucket ==="
+          S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'${P}-frontend')].Name | [0]" --output text 2>/dev/null || echo "")
+          if [ -n "$S3_BUCKET" ] && [ "$S3_BUCKET" != "None" ]; then
+            echo "Found S3 bucket: $S3_BUCKET"
+            terraform import aws_s3_bucket.frontend "$S3_BUCKET" 2>/dev/null || true
+            terraform import aws_s3_bucket_website_configuration.frontend "$S3_BUCKET" 2>/dev/null || true
+            terraform import aws_s3_bucket_cors_configuration.frontend "$S3_BUCKET" 2>/dev/null || true
+            terraform import aws_s3_bucket_public_access_block.frontend "$S3_BUCKET" 2>/dev/null || true
+
+            echo "=== Force-disabling S3 Block Public Access via AWS CLI ==="
+            aws s3api put-public-access-block \
+              --bucket "$S3_BUCKET" \
+              --public-access-block-configuration \
+                "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false" \
+              --region $R 2>/dev/null && echo "✅ Block Public Access disabled on $S3_BUCKET" || echo "⚠️ Could not disable Block Public Access"
+          else
+            echo "No existing S3 bucket — will be created fresh."
+          fi
+
           echo "=== Import complete ==="
 
       # ─────────────────────────────────────────────────────

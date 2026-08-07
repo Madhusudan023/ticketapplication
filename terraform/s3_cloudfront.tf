@@ -31,17 +31,20 @@ resource "aws_s3_bucket_cors_configuration" "frontend" {
   lifecycle { ignore_changes = all }
 }
 
+# IMPORTANT: No lifecycle ignore_changes here — Terraform MUST enforce
+# block_public_policy = false before the bucket policy can be applied.
 resource "aws_s3_bucket_public_access_block" "frontend" {
   bucket                  = aws_s3_bucket.frontend.id
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
   restrict_public_buckets = false
-  lifecycle { ignore_changes = all }
 }
 
 resource "aws_s3_bucket_policy" "frontend_public" {
-  bucket     = aws_s3_bucket.frontend.id
+  bucket = aws_s3_bucket.frontend.id
+
+  # Must wait for Block Public Access to be fully disabled first
   depends_on = [aws_s3_bucket_public_access_block.frontend]
 
   policy = jsonencode({
@@ -54,6 +57,4 @@ resource "aws_s3_bucket_policy" "frontend_public" {
       Resource  = "${aws_s3_bucket.frontend.arn}/*"
     }]
   })
-
-  lifecycle { ignore_changes = all }
 }
