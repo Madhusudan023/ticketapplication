@@ -169,7 +169,7 @@ resource "aws_ecs_task_definition" "auth_service" {
       { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
       { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
     ]
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "auth" }) }
   }])
@@ -211,7 +211,7 @@ resource "aws_ecs_task_definition" "ticket_service" {
       { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
       { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
     ]
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "ticket" }) }
   }])
@@ -253,7 +253,7 @@ resource "aws_ecs_task_definition" "comment_service" {
       { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
       { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
     ]
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "comment" }) }
   }])
@@ -295,7 +295,7 @@ resource "aws_ecs_task_definition" "attachment_service" {
       { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
       { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
     ]
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "attachment" }) }
   }])
@@ -337,7 +337,7 @@ resource "aws_ecs_task_definition" "dashboard_service" {
       { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
       { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
     ]
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "dashboard" }) }
   }])

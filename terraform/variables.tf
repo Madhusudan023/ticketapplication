@@ -27,3 +27,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "db_password" {
+  description = "Database master password"
+  type        = string
+  default     = "TicketDeskPass123!"
+}

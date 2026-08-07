@@ -1,12 +1,3 @@
-resource "random_password" "db_password" {
-  length  = 16
-  special = false
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
 resource "aws_secretsmanager_secret" "db_secret" {
   name        = "${var.project_name}-db-credentials-v2"
   description = "RDS MySQL Database credentials for TicketDesk"
@@ -22,12 +13,8 @@ resource "aws_secretsmanager_secret_version" "db_secret_val" {
   secret_id = aws_secretsmanager_secret.db_secret.id
   secret_string = jsonencode({
     username = var.db_username
-    password = random_password.db_password.result
+    password = var.db_password
   })
-
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 resource "aws_db_subnet_group" "main" {
@@ -50,14 +37,17 @@ resource "aws_db_instance" "mysql" {
   instance_class         = "db.t3.micro"
   db_name                = "ticketdesk_db"
   username               = var.db_username
-  password               = random_password.db_password.result
+  password               = var.db_password
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   publicly_accessible    = false
 
   lifecycle {
-    ignore_changes = all
+    ignore_changes = [
+      allocated_storage,
+      max_allocated_storage
+    ]
   }
 
   tags = { Name = "${var.project_name}-rds-mysql" }
