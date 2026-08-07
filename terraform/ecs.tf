@@ -61,9 +61,26 @@ locals {
       "awslogs-create-group" = "true"
     }
   }
+  # Eureka URL via ALB
   eureka_url = "http://${aws_lb.main.dns_name}:8761/eureka/"
-  db_url     = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+
+  # RDS base host:port (endpoint includes port)
+  rds_host = aws_db_instance.mysql.endpoint
+
+  # Per-service DB URLs matching each service's application.yml default DB name
+  db_url_auth       = "jdbc:mysql://${local.rds_host}/auth_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+  db_url_ticket     = "jdbc:mysql://${local.rds_host}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+  db_url_comment    = "jdbc:mysql://${local.rds_host}/comments_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+  db_url_attachment = "jdbc:mysql://${local.rds_host}/attachments_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+  db_url_dashboard  = "jdbc:mysql://${local.rds_host}/ticketdesk_db?useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true"
+
+  # Common env vars passed to every service that needs Eureka
+  eureka_env = [
+    { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
+    { name = "EUREKA_URI",                           value = local.eureka_url }
+  ]
 }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. EUREKA SERVER
@@ -165,12 +182,11 @@ resource "aws_ecs_task_definition" "auth_service" {
     image     = "${aws_ecr_repository.auth_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8089, hostPort = 8089, protocol = "tcp" }]
-    environment = [
-      { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    environment = concat(local.eureka_env, [
+      { name = "SPRING_DATASOURCE_URL",      value = local.db_url_auth },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
       { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ]
+    ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "auth" }) }
   }])
 }
@@ -207,12 +223,11 @@ resource "aws_ecs_task_definition" "ticket_service" {
     image     = "${aws_ecr_repository.ticket_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8082, hostPort = 8082, protocol = "tcp" }]
-    environment = [
-      { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    environment = concat(local.eureka_env, [
+      { name = "SPRING_DATASOURCE_URL",      value = local.db_url_ticket },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
       { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ]
+    ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "ticket" }) }
   }])
 }
@@ -249,12 +264,11 @@ resource "aws_ecs_task_definition" "comment_service" {
     image     = "${aws_ecr_repository.comment_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8084, hostPort = 8084, protocol = "tcp" }]
-    environment = [
-      { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    environment = concat(local.eureka_env, [
+      { name = "SPRING_DATASOURCE_URL",      value = local.db_url_comment },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
       { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ]
+    ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "comment" }) }
   }])
 }
@@ -291,12 +305,11 @@ resource "aws_ecs_task_definition" "attachment_service" {
     image     = "${aws_ecr_repository.attachment_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8085, hostPort = 8085, protocol = "tcp" }]
-    environment = [
-      { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    environment = concat(local.eureka_env, [
+      { name = "SPRING_DATASOURCE_URL",      value = local.db_url_attachment },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
       { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ]
+    ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "attachment" }) }
   }])
 }
@@ -333,12 +346,11 @@ resource "aws_ecs_task_definition" "dashboard_service" {
     image     = "${aws_ecr_repository.dashboard_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8087, hostPort = 8087, protocol = "tcp" }]
-    environment = [
-      { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    environment = concat(local.eureka_env, [
+      { name = "SPRING_DATASOURCE_URL",      value = local.db_url_dashboard },
       { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
       { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ]
+    ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "dashboard" }) }
   }])
 }
