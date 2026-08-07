@@ -245,8 +245,15 @@ jobs:
           node-version: '18'
 
       - name: Build React Frontend
+        working-directory: ./frontend
         run: |
-          cd frontend
+          ALB_HOST=$(cd ../terraform && terraform output -raw alb_dns_name 2>/dev/null || echo "")
+          if [ -n "$ALB_HOST" ] && [ "$ALB_HOST" != "None" ]; then
+            export VITE_API_BASE="http://$ALB_HOST/api/v1"
+            echo "Successfully set VITE_API_BASE=$VITE_API_BASE"
+          else
+            echo "Warning: Could not fetch alb_dns_name output, using fallback."
+          fi
           npm ci
           npm run build
 
