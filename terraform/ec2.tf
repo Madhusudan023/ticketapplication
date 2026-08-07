@@ -81,13 +81,3 @@ resource "aws_instance" "app_server" {
     Name = "${var.project_name}-free-tier-server"
   }
 }
-
-output "ec2_public_ip" {
-  description = "Public IP of the Free Tier EC2 instance"
-  value       = aws_instance.app_server.public_ip
-}
-
-output "free_tier_eureka_url" {
-  description = "Eureka Dashboard URL on Free Tier EC2"
-  value       = "http://${aws_instance.app_server.public_ip}:8761"
-}
