@@ -236,7 +236,35 @@ jobs:
           TF_VAR_aws_region: us-east-1
 
       # ─────────────────────────────────────────────────────
-      # 6. Get ALB DNS for frontend build
+      # 6. Explicitly reset RDS master password
+      #    This guarantees the password the ECS tasks use
+      #    (TicketDeskPass123!) matches the actual RDS password,
+      #    regardless of Terraform state drift.
+      # ─────────────────────────────────────────────────────
+      - name: Reset RDS Master Password
+        if: env.AWS_KEY != ''
+        run: |
+          echo "=== Resetting RDS master password ==="
+          aws rds modify-db-instance \
+            --db-instance-identifier ticketdesk-db \
+            --master-user-password "TicketDeskPass123!" \
+            --apply-immediately \
+            --region us-east-1 2>/dev/null || echo "⚠️ RDS modify skipped (instance may not exist yet)"
+
+          # Wait for RDS to be available after password change
+          echo "Waiting for RDS to be available..."
+          for i in $(seq 1 15); do
+            STATUS=$(aws rds describe-db-instances \
+              --db-instance-identifier ticketdesk-db \
+              --query 'DBInstances[0].DBInstanceStatus' \
+              --output text --region us-east-1 2>/dev/null || echo "")
+            echo "  [$i] RDS status: $STATUS"
+            [ "$STATUS" = "available" ] && echo "✅ RDS ready" && break
+            sleep 20
+          done
+
+      # ─────────────────────────────────────────────────────
+      # 7. Get ALB DNS for frontend build
       # ─────────────────────────────────────────────────────
       - name: Get ALB DNS Name
         if: env.AWS_KEY != ''
