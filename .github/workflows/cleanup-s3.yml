@@ -1,0 +1,50 @@
+name: Empty & Delete All S3 Buckets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup-s3:
+    name: Force Empty and Delete All S3 Buckets
+    runs-on: ubuntu-latest
+    env:
+      AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+    steps:
+      - name: Configure AWS Credentials
+        if: env.AWS_KEY != ''
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Delete All Objects and S3 Buckets
+        if: env.AWS_KEY != ''
+        run: |
+          echo "=== 1. Searching for all ticketdesk S3 buckets ==="
+          ALL_BUCKETS=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk')].Name" --output text 2>/dev/null || echo "")
+          
+          if [ -z "$ALL_BUCKETS" ] || [ "$ALL_BUCKETS" == "None" ]; then
+            echo "No ticketdesk S3 buckets found."
+          else
+            for b in $ALL_BUCKETS; do
+              echo "---------------------------------------------------"
+              echo "Processing bucket: $b"
+              
+              echo "1. Deleting standard objects..."
+              aws s3 rm "s3://$b" --recursive || true
+
+              echo "2. Deleting object versions..."
+              VERSIONS=$(aws s3api list-object-versions --bucket "$b" --output json 2>/dev/null || echo "")
+              if [ -n "$VERSIONS" ]; then
+                aws s3api delete-objects --bucket "$b" --delete "$(aws s3api list-object-versions --bucket "$b" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" 2>/dev/null || true
+                aws s3api delete-objects --bucket "$b" --delete "$(aws s3api list-object-versions --bucket "$b" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" 2>/dev/null || true
+              fi
+
+              echo "3. Deleting S3 bucket $b..."
+              aws s3api delete-bucket --bucket "$b" --region us-east-1 || true
+              echo "Bucket $b deleted successfully!"
+            done
+          fi
+          echo "=== S3 cleanup complete! ==="
