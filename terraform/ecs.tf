@@ -7,6 +7,18 @@ resource "aws_ecs_cluster" "main" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CLOUDWATCH LOG GROUP (ignore if already exists via import)
+# ──────────────────────────────────────────────────────────────────────────────
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/${var.project_name}"
+  retention_in_days = 7
+
+  lifecycle {
+    ignore_changes = [retention_in_days, tags]
+  }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # IAM ROLES FOR ECS
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "ecs_execution_role" {
@@ -20,6 +32,10 @@ resource "aws_iam_role" "ecs_execution_role" {
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
+
+  lifecycle {
+    ignore_changes = [assume_role_policy, tags]
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
@@ -43,8 +59,11 @@ resource "aws_iam_role" "ecs_task_role" {
       Principal = { Service = "ecs-tasks.amazonaws.com" }
     }]
   })
-}
 
+  lifecycle {
+    ignore_changes = [assume_role_policy, tags]
+  }
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LOCAL VARS: reusable log config
@@ -53,9 +72,9 @@ locals {
   log_config = {
     logDriver = "awslogs"
     options = {
-      "awslogs-group"         = "/ecs/${var.project_name}"
-      "awslogs-region"        = var.aws_region
-      "awslogs-create-group"  = "true"
+      "awslogs-group"        = "/ecs/${var.project_name}"
+      "awslogs-region"       = var.aws_region
+      "awslogs-create-group" = "true"
     }
   }
   eureka_url = "http://${aws_lb.main.dns_name}:8761/eureka/"

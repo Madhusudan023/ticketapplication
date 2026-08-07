@@ -7,6 +7,11 @@ resource "aws_secretsmanager_secret" "db_secret" {
   name        = "${var.project_name}-db-credentials-v2"
   description = "RDS MySQL Database credentials for TicketDesk"
 
+  # If the secret already exists in AWS, ignore it — don't fail
+  lifecycle {
+    ignore_changes = [name]
+  }
+
   tags = {
     Name = "${var.project_name}-db-secret"
   }
@@ -18,6 +23,11 @@ resource "aws_secretsmanager_secret_version" "db_secret_val" {
     username = var.db_username
     password = random_password.db_password.result
   })
+
+  # Don't update the secret value if it already exists (password was set on first run)
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
 }
 
 resource "aws_db_subnet_group" "main" {
@@ -43,6 +53,11 @@ resource "aws_db_instance" "mysql" {
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   publicly_accessible    = false
+
+  # If RDS already exists, don't try to change password — it won't match the new random one
+  lifecycle {
+    ignore_changes = [password, engine_version]
+  }
 
   tags = {
     Name = "${var.project_name}-rds-mysql"
