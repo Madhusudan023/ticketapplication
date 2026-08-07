@@ -1,0 +1,70 @@
+name: Deploy API Gateway Only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-gateway:
+    name: Build & Deploy API Gateway Only
+    runs-on: ubuntu-latest
+    env:
+      AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+    steps:
+      # ─────────────────────────────────────────────────────
+      # 1. Checkout Code
+      # ─────────────────────────────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # ─────────────────────────────────────────────────────
+      # 2. Configure AWS Credentials
+      # ─────────────────────────────────────────────────────
+      - name: Configure AWS Credentials
+        if: env.AWS_KEY != ''
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # ─────────────────────────────────────────────────────
+      # 3. Log in to ECR
+      # ─────────────────────────────────────────────────────
+      - name: Login to Amazon ECR
+        if: env.AWS_KEY != ''
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # ─────────────────────────────────────────────────────
+      # 4. Build & Push API Gateway Image Only
+      # ─────────────────────────────────────────────────────
+      - name: Build & Push API Gateway Image
+        if: env.AWS_KEY != '' && steps.login-ecr.outputs.registry != ''
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          TAG=$(git rev-parse --short HEAD)
+          echo "Building API Gateway with tag $TAG..."
+          docker build \
+            -t $ECR_REGISTRY/ticketdesk-api-gateway:${TAG} \
+            -t $ECR_REGISTRY/ticketdesk-api-gateway:latest \
+            ./backend/api-gateway
+          
+          docker push $ECR_REGISTRY/ticketdesk-api-gateway:${TAG}
+          docker push $ECR_REGISTRY/ticketdesk-api-gateway:latest
+          echo "API Gateway image pushed to ECR!"
+
+      # ─────────────────────────────────────────────────────
+      # 5. Force ECS API Gateway Service Redeployment
+      # ─────────────────────────────────────────────────────
+      - name: Redeploy ECS Gateway Service
+        if: env.AWS_KEY != ''
+        run: |
+          echo "Forcing new deployment of ticketdesk-gateway-service..."
+          aws ecs update-service \
+            --cluster ticketdesk-cluster \
+            --service ticketdesk-gateway-service \
+            --force-new-deployment \
+            --region us-east-1
+          echo "API Gateway service redeployed successfully!"
