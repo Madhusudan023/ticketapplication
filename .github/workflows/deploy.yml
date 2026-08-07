@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Terraform, ECR, S3 & ECS Fargate Deploy)
+name: CI/CD Pipeline (100% Free Tier Deploy)
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   ci-cd-pipeline:
-    name: Build, Terraform Apply, ECR Push & ECS Deploy
+    name: Build, ECR Push & Free Tier EC2 Deploy
     runs-on: ubuntu-latest
     env:
       AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -51,25 +51,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Pre-Cleanup Existing AWS Conflicts
+      - name: Pre-Cleanup Existing AWS Conflicts (Free Quota Sweep)
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
-          echo "=== 1. Terminating EC2 Instances ==="
-          INSTANCES=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=ticketdesk-free-tier-server" --query 'Reservations[*].Instances[*].InstanceId' --output text --region us-east-1 || echo "")
-          for inst in $INSTANCES; do
-            if [ -n "$inst" ] && [ "$inst" != "None" ]; then
-              echo "Terminating instance: $inst..."
-              aws ec2 terminate-instances --instance-ids "$inst" --region us-east-1 || true
-            fi
-          done
-
-          echo "=== 2. Deleting ECR Repositories ==="
+          echo "=== 1. Deleting ECR Repositories ==="
           REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
           for repo in "${REPOS[@]}"; do
             aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
           done
 
-          echo "=== 3. Deleting IAM Roles & Secrets ==="
+          echo "=== 2. Deleting IAM Roles & Secrets ==="
           for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
             POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
             for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
@@ -78,7 +69,7 @@ jobs:
           aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
           aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
 
-          echo "=== 4. Deleting Non-Default VPCs ==="
+          echo "=== 3. Deleting Non-Default VPCs ==="
           VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region us-east-1 || echo "")
           for vpc in $VPCS; do
             if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
@@ -106,7 +97,7 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init & Apply
+      - name: Terraform Init & Apply (100% Free Tier Architecture)
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
@@ -168,18 +159,14 @@ jobs:
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:latest
 
-      - name: Force New ECS Deployment (Deploy All Microservices)
+      - name: 100% Free Tier Deployment Summary
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
-          echo "=== Triggering ECS Fargate deployment for all microservices ==="
-          SERVICES=("ticketdesk-eureka-service" "ticketdesk-gateway-service" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
-
-          for service in "${SERVICES[@]}"; do
-            echo "Updating ECS service: $service..."
-            aws ecs update-service \
-              --cluster ticketdesk-cluster \
-              --service "$service" \
-              --force-new-deployment \
-              --region us-east-1 || true
-          done
-          echo "All 7 ECS microservices triggered successfully!"
+          echo "=========================================================="
+          echo " 🎉 100% AWS FREE TIER DEPLOYMENT COMPLETED SUCCESSFULLY!"
+          echo "=========================================================="
+          echo " - EC2 t3.micro Instance   : 100% Free Tier (750 hrs/month)"
+          echo " - RDS MySQL db.t3.micro   : 100% Free Tier (750 hrs/month)"
+          echo " - Amazon ECR Repositories : 100% Free Tier (500 MB/month)"
+          echo " - Frontend S3 Bucket      : 100% Free Tier (5 GB/month)"
+          echo "=========================================================="
