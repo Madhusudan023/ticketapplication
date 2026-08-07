@@ -1,0 +1,100 @@
+﻿name: Diagnose Application Health
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Full Health Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: "[1] ALB Status and URLs"
+        run: |
+          echo "=============================================="
+          echo " 1. ALB STATUS AND URLs"
+          echo "=============================================="
+          ALB_DNS=$(aws elbv2 describe-load-balancers --names ticketdesk-alb --query 'LoadBalancers[0].DNSName' --output text --region us-east-1 2>/dev/null || echo "NOT FOUND")
+          S3_BUCKET=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'ticketdesk-frontend')].Name | [0]" --output text 2>/dev/null || echo "NOT FOUND")
+          echo "  ALB DNS: $ALB_DNS"
+          echo "  Frontend: http://$S3_BUCKET.s3-website-us-east-1.amazonaws.com"
+          echo "  API:      http://$ALB_DNS/api/v1"
+          echo "  Eureka:   http://$ALB_DNS:8761"
+          echo "ALB_DNS=$ALB_DNS" >> $GITHUB_ENV
+          echo "S3_BUCKET=$S3_BUCKET" >> $GITHUB_ENV
+
+      - name: "[2] ECS Services Status"
+        run: |
+          echo "=============================================="
+          echo " 2. ECS SERVICES STATUS"
+          echo "=============================================="
+          for svc in ticketdesk-eureka-service ticketdesk-gateway-service ticketdesk-auth-service ticketdesk-ticket-service ticketdesk-comment-service ticketdesk-attachment-service ticketdesk-dashboard-service; do
+            INFO=$(aws ecs describe-services --cluster ticketdesk-cluster --services "$svc" --region us-east-1 --query 'services[0].{desired:desiredCount,running:runningCount,status:status}' --output json 2>/dev/null || echo "NOT FOUND")
+            echo "  $svc: $INFO"
+          done
+
+      - name: "[3] RDS Status and Security Groups"
+        run: |
+          echo "=============================================="
+          echo " 3. RDS STATUS AND SECURITY GROUPS"
+          echo "=============================================="
+          aws rds describe-db-instances --db-instance-identifier ticketdesk-db --query 'DBInstances[0].{Status:DBInstanceStatus,Host:Endpoint.Address,Port:Endpoint.Port,SGs:VpcSecurityGroups}' --output json --region us-east-1 2>/dev/null
+          RDS_HOST=$(aws rds describe-db-instances --db-instance-identifier ticketdesk-db --query 'DBInstances[0].Endpoint.Address' --output text --region us-east-1 2>/dev/null || echo "")
+          echo "RDS_HOST=$RDS_HOST" >> $GITHUB_ENV
+          echo ""
+          echo "  RDS SG Rules:"
+          RDS_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=ticketdesk-rds-sg" --query 'SecurityGroups[0].GroupId' --output text --region us-east-1 2>/dev/null || echo "")
+          aws ec2 describe-security-groups --group-ids "$RDS_SG" --query 'SecurityGroups[0].IpPermissions' --output json --region us-east-1 2>/dev/null || echo "  Could not get RDS SG rules"
+
+      - name: "[4] Check RDS Tables via MySQL"
+        run: |
+          echo "=============================================="
+          echo " 4. DATABASE TABLES (Spring Boot creates these)"
+          echo "=============================================="
+          sudo apt-get install -y mysql-client -q 2>/dev/null
+          echo "  Connecting to RDS: $RDS_HOST"
+          mysql -h "$RDS_HOST" -P 3306 -u admin -pTicketDeskPass123! --connect-timeout=10 \
+            -e "SHOW DATABASES; USE ticketdesk_db; SHOW TABLES; SELECT COUNT(*) as user_count FROM users;" 2>&1 \
+            || echo "  Cannot reach RDS from GitHub runner (private VPC - this is expected)"
+
+      - name: "[5] Test Login End-to-End"
+        run: |
+          echo "=============================================="
+          echo " 5. END-TO-END LOGIN TEST"
+          echo "=============================================="
+          echo "  Testing: http://$ALB_DNS/api/v1/auth/login"
+          RESP=$(curl -s -X POST "http://$ALB_DNS/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@ticketdesk.com","password":"admin123"}' \
+            --max-time 30 2>&1)
+          echo "  Response: $RESP"
+          if echo "$RESP" | grep -q '"success":true'; then
+            echo ""
+            echo "  LOGIN SUCCESS! App is working!"
+          else
+            echo ""
+            echo "  LOGIN FAILED - checking CloudWatch logs..."
+            LOG_STREAM=$(aws logs describe-log-streams --log-group-name "/ecs/ticketdesk" --log-stream-name-prefix "auth-service" --order-by LastEventTime --descending --region us-east-1 --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "")
+            echo "  Auth log stream: $LOG_STREAM"
+            if [ -n "$LOG_STREAM" ] && [ "$LOG_STREAM" != "None" ]; then
+              aws logs get-log-events --log-group-name "/ecs/ticketdesk" --log-stream-name "$LOG_STREAM" --limit 40 --query 'events[*].message' --output text --region us-east-1 2>/dev/null | tail -40
+            fi
+          fi
+
+      - name: "[6] Summary"
+        run: |
+          echo "=============================================="
+          echo " SUMMARY"
+          echo "=============================================="
+          echo "  Frontend: http://$S3_BUCKET.s3-website-us-east-1.amazonaws.com"
+          echo "  API:      http://$ALB_DNS/api/v1"
+          echo "  Eureka:   http://$ALB_DNS:8761"
+          echo "  Login:    admin@ticketdesk.com / admin123"
+          echo "=============================================="
