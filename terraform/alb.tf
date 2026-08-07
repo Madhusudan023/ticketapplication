@@ -18,12 +18,12 @@ resource "aws_lb_target_group" "eureka" {
   target_type = "ip"
 
   health_check {
-    path                = "/actuator/health"
+    path                = "/"
     healthy_threshold   = 2
     unhealthy_threshold = 5
-    timeout             = 5
+    timeout             = 10
     interval            = 30
-    matcher             = "200"
+    matcher             = "200-399"
   }
 
   tags = {
@@ -34,6 +34,17 @@ resource "aws_lb_target_group" "eureka" {
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.eureka.arn
+  }
+}
+
+resource "aws_lb_listener" "eureka" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = "8761"
   protocol          = "HTTP"
 
   default_action {

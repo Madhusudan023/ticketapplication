@@ -28,6 +28,12 @@ resource "aws_iam_role_policy_attachment" "ecs_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Allow ECS execution role to pull from ECR
+resource "aws_iam_role_policy_attachment" "ecs_execution_ecr" {
+  role       = aws_iam_role.ecs_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
 resource "aws_iam_role" "ecs_task_role" {
   name = "${var.project_name}-ecs-task-role"
 
@@ -71,14 +77,22 @@ resource "aws_ecs_task_definition" "eureka" {
         {
           containerPort = 8761
           hostPort      = 8761
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "SPRING_PROFILES_ACTIVE"
+          value = "docker"
         }
       ]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.ecs.name
+          "awslogs-group"         = "/ecs/${var.project_name}"
           "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "eureka"
+          "awslogs-create-group"  = "true"
         }
       }
     }
@@ -95,6 +109,10 @@ resource "aws_ecs_service" "eureka" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # Wait for ECR image to be pushed before deploying
+  # This prevents CannotPullContainerError on first deploy
+  force_new_deployment = true
+
   network_configuration {
     subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
@@ -107,5 +125,10 @@ resource "aws_ecs_service" "eureka" {
     container_port   = 8761
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [
+    aws_lb_listener.http,
+    aws_lb_listener.eureka,
+    aws_iam_role_policy_attachment.ecs_execution,
+    aws_iam_role_policy_attachment.ecs_execution_ecr,
+  ]
 }
