@@ -23,6 +23,27 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Empty & Delete All S3 Buckets
+        if: env.AWS_KEY != ''
+        run: |
+          echo "=== Force Emptying and Deleting All S3 Buckets ==="
+          ALL_BUCKETS=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk')].Name" --output text 2>/dev/null || echo "")
+          for b in $ALL_BUCKETS; do
+            if [ -n "$b" ] && [ "$b" != "None" ]; then
+              echo "Force emptying bucket: $b..."
+              aws s3 rm "s3://$b" --recursive || true
+              
+              # Delete all object versions and delete markers if versioning was enabled
+              echo "Deleting all object versions in $b..."
+              aws s3api delete-objects --bucket "$b" --delete "$(aws s3api list-object-versions --bucket "$b" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" 2>/dev/null || true
+              aws s3api delete-objects --bucket "$b" --delete "$(aws s3api list-object-versions --bucket "$b" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null)" 2>/dev/null || true
+
+              echo "Deleting S3 bucket: $b..."
+              aws s3api delete-bucket --bucket "$b" --region us-east-1 || true
+            fi
+          done
+          echo "S3 buckets completely emptied and deleted!"
+
       - name: Terminate EC2 Instances
         if: env.AWS_KEY != ''
         run: |
@@ -132,17 +153,5 @@ jobs:
           done
           echo "VPCs done."
 
-      - name: Delete S3 Bucket
-        if: env.AWS_KEY != ''
-        run: |
-          echo "=== Deleting S3 Buckets ==="
-          BUCKET=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk')].Name" --output text 2>/dev/null || echo "")
-          for b in $BUCKET; do
-            echo "Emptying and deleting bucket: $b"
-            aws s3 rm "s3://$b" --recursive || true
-            aws s3api delete-bucket --bucket "$b" --region us-east-1 || true
-          done
-          echo "S3 done."
-
       - name: Done
-        run: echo "🎉 ALL AWS RESOURCES HAVE BEEN FORCE DELETED SUCCESSFULLY!"
+        run: echo "🎉 ALL AWS RESOURCES & S3 BUCKETS HAVE BEEN FORCE EMPTIED AND DELETED SUCCESSFULLY!"
