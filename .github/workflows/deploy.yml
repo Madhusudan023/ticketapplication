@@ -123,13 +123,48 @@ jobs:
         with:
           terraform_version: 1.5.0
 
+      - name: Clean Up Conflicting AWS Resources Before Apply
+        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+        run: |
+          echo "=== Pre-Cleanup: Removing conflicting existing resources ==="
+          aws ecs update-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --desired-count 0 --region us-east-1 || true
+          aws ecs delete-service --cluster ticketdesk-cluster --service ticketdesk-eureka-service --force --region us-east-1 || true
+          aws ecs delete-cluster --cluster ticketdesk-cluster --region us-east-1 || true
+
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names ticketdesk-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text --region us-east-1 2>/dev/null || echo "")
+          if [ "$ALB_ARN" != "" ] && [ "$ALB_ARN" != "None" ]; then
+            LISTENER_ARNS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --query 'Listeners[*].ListenerArn' --output text --region us-east-1 || echo "")
+            for L in $LISTENER_ARNS; do aws elbv2 delete-listener --listener-arn "$L" --region us-east-1 || true; done
+            aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region us-east-1 || true
+            sleep 10
+          fi
+
+          TG_ARN=$(aws elbv2 describe-target-groups --names ticketdesk-eureka-tg --query 'TargetGroups[0].TargetGroupArn' --output text --region us-east-1 2>/dev/null || echo "")
+          if [ "$TG_ARN" != "" ] && [ "$TG_ARN" != "None" ]; then
+            aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region us-east-1 || true
+          fi
+
+          for repo in ticketdesk-eureka-server ticketdesk-frontend ticketdesk-api-gateway ticketdesk-auth-service ticketdesk-ticket-service ticketdesk-comment-service ticketdesk-attachment-service ticketdesk-dashboard-service; do
+            aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
+          done
+
+          for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
+            aws iam delete-role --role-name "$role" || true
+          done
+
+          aws logs delete-log-group --log-group-name "/ecs/ticketdesk" --region us-east-1 || true
+          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
+          aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
+          echo "Pre-cleanup complete!"
+
       - name: Terraform Init & Apply
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           terraform init
-          terraform plan -out=tfplan
-          terraform apply -auto-approve tfplan
+          terraform apply -auto-approve
 
       - name: Log in to Amazon ECR
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
