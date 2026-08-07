@@ -1,6 +1,3 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# APPLICATION LOAD BALANCER
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_lb" "main" {
   name               = "${var.project_name}-alb"
   internal           = false
@@ -8,14 +5,13 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = aws_subnet.public[*].id
 
-  tags = {
-    Name = "${var.project_name}-alb"
+  lifecycle {
+    ignore_changes = all
   }
+
+  tags = { Name = "${var.project_name}-alb" }
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TARGET GROUPS
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_lb_target_group" "eureka" {
   name        = "${var.project_name}-eureka-tg"
   port        = 8761
@@ -30,6 +26,10 @@ resource "aws_lb_target_group" "eureka" {
     timeout             = 10
     interval            = 30
     matcher             = "200-399"
+  }
+
+  lifecycle {
+    ignore_changes = all
   }
 
   tags = { Name = "${var.project_name}-eureka-tg" }
@@ -51,12 +51,13 @@ resource "aws_lb_target_group" "api_gateway" {
     matcher             = "200-499"
   }
 
+  lifecycle {
+    ignore_changes = all
+  }
+
   tags = { Name = "${var.project_name}-gateway-tg" }
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ALB LISTENERS
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_lb_listener" "eureka" {
   load_balancer_arn = aws_lb.main.arn
   port              = "8761"
@@ -65,6 +66,10 @@ resource "aws_lb_listener" "eureka" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.eureka.arn
+  }
+
+  lifecycle {
+    ignore_changes = all
   }
 }
 
@@ -76,5 +81,9 @@ resource "aws_lb_listener" "api_gateway" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api_gateway.arn
+  }
+
+  lifecycle {
+    ignore_changes = all
   }
 }

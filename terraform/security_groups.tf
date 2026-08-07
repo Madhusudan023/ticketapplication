@@ -1,9 +1,6 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# SECURITY GROUP: ALB (public internet → port 80)
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_security_group" "alb_sg" {
   name        = "${var.project_name}-alb-sg"
-  description = "Allow HTTP traffic from the internet to ALB"
+  description = "Allow HTTP traffic from internet to ALB"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -34,14 +31,13 @@ resource "aws_security_group" "alb_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-alb-sg"
+  lifecycle {
+    ignore_changes = all
   }
+
+  tags = { Name = "${var.project_name}-alb-sg" }
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SECURITY GROUP: ECS FARGATE TASKS (ALB → tasks, tasks → tasks)
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.project_name}-ecs-tasks-sg"
   description = "Allow inbound from ALB and inter-service communication"
@@ -54,7 +50,6 @@ resource "aws_security_group" "ecs_tasks" {
     security_groups = [aws_security_group.alb_sg.id]
   }
 
-  # Allow ECS tasks to talk to each other
   ingress {
     from_port = 0
     to_port   = 65535
@@ -69,14 +64,13 @@ resource "aws_security_group" "ecs_tasks" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-ecs-tasks-sg"
+  lifecycle {
+    ignore_changes = all
   }
+
+  tags = { Name = "${var.project_name}-ecs-tasks-sg" }
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# SECURITY GROUP: RDS MySQL (ECS tasks → MySQL port 3306)
-# ──────────────────────────────────────────────────────────────────────────────
 resource "aws_security_group" "rds_sg" {
   name        = "${var.project_name}-rds-sg"
   description = "Allow MySQL traffic from ECS tasks only"
@@ -96,7 +90,9 @@ resource "aws_security_group" "rds_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-rds-sg"
+  lifecycle {
+    ignore_changes = all
   }
+
+  tags = { Name = "${var.project_name}-rds-sg" }
 }
