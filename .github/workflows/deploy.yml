@@ -96,14 +96,15 @@ jobs:
           aws rds delete-db-subnet-group \
             --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
 
-          echo "--- [8] Deleting Security Groups ---"
-          for sg_name in ${P}-alb-sg ${P}-ecs-tasks-sg ${P}-rds-sg; do
+          echo "--- [8] Deleting ALB + ECS Security Groups (keep RDS SG stable!) ---"
+          for sg_name in ${P}-alb-sg ${P}-ecs-tasks-sg; do
             SG_ID=$(aws ec2 describe-security-groups \
               --filters "Name=group-name,Values=$sg_name" \
               --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
             [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && \
               aws ec2 delete-security-group --group-id "$SG_ID" --region $R 2>/dev/null || true
           done
+          echo "⚠️  RDS SG (${P}-rds-sg) intentionally preserved across deployments"
 
           echo "--- [9] Remove orphaned VPCs (keep ticketdesk-vpc) ---"
           VPCS=$(aws ec2 describe-vpcs \
@@ -276,6 +277,51 @@ jobs:
             [ "$STATUS" = "available" ] && echo "✅ RDS ready" && break
             sleep 20
           done
+
+          # ── Guarantee RDS SG allows ECS tasks (new SG ID after each deploy) ──
+          echo "=== Fixing RDS Security Group Rules ==="
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=ticketdesk-vpc" \
+            --query 'Vpcs[0].VpcId' --output text --region us-east-1 2>/dev/null || echo "")
+
+          RDS_SG=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=ticketdesk-rds-sg" "Name=vpc-id,Values=$VPC_ID" \
+            --query 'SecurityGroups[0].GroupId' --output text --region us-east-1 2>/dev/null || echo "")
+
+          ECS_SG=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=ticketdesk-ecs-tasks-sg" "Name=vpc-id,Values=$VPC_ID" \
+            --query 'SecurityGroups[0].GroupId' --output text --region us-east-1 2>/dev/null || echo "")
+
+          echo "VPC: $VPC_ID  |  RDS SG: $RDS_SG  |  ECS SG: $ECS_SG"
+
+          if [ -n "$RDS_SG" ] && [ "$RDS_SG" != "None" ]; then
+            # Always add VPC CIDR 10.0.0.0/16 → port 3306
+            aws ec2 authorize-security-group-ingress \
+              --group-id "$RDS_SG" \
+              --protocol tcp --port 3306 \
+              --cidr 10.0.0.0/16 \
+              --region us-east-1 2>/dev/null || echo "VPC CIDR rule already exists"
+
+            # Also add the current ECS tasks SG → port 3306
+            if [ -n "$ECS_SG" ] && [ "$ECS_SG" != "None" ]; then
+              aws ec2 authorize-security-group-ingress \
+                --group-id "$RDS_SG" \
+                --protocol tcp --port 3306 \
+                --source-group "$ECS_SG" \
+                --region us-east-1 2>/dev/null || echo "ECS SG rule already exists"
+            fi
+
+            # Also update the RDS instance itself to use this SG (in case it changed)
+            aws rds modify-db-instance \
+              --db-instance-identifier ticketdesk-db \
+              --vpc-security-group-ids "$RDS_SG" \
+              --apply-immediately \
+              --region us-east-1 2>/dev/null || echo "RDS SG update skipped"
+
+            echo "✅ RDS SG rules enforced"
+          else
+            echo "⚠️ RDS SG not found — Terraform must create it"
+          fi
 
       # ─────────────────────────────────────────────────────
       # 7. Get ALB DNS for frontend build
