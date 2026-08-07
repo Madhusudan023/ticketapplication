@@ -32,43 +32,107 @@ jobs:
           aws-region: us-east-1
 
       # ─────────────────────────────────────────────────────
-      # 3. Remove ONLY truly orphaned VPCs (not our ticketdesk-vpc)
-      #    This prevents VPC quota errors without breaking
-      #    existing RDS subnet group → VPC associations.
+      # 3. Delete STATELESS resources before terraform runs
+      #    (ALB, TGs, Listeners, SGs, ECS, CW, IAM, RDS subnet group)
+      #    These are safe to delete — terraform will recreate them.
+      #    We KEEP: VPC, RDS instance, ECR repos (stateful data)
       # ─────────────────────────────────────────────────────
-      - name: Remove Orphaned VPCs (keep ticketdesk-vpc)
+      - name: Delete Conflicting Stateless AWS Resources
         if: env.AWS_KEY != ''
         run: |
-          echo "=== Removing orphaned non-default VPCs (skipping ticketdesk-vpc) ==="
+          P="ticketdesk"
+          R="us-east-1"
+
+          echo "=== [1/8] Deleting ALB + Listeners + Target Groups ==="
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names ${P}-alb \
+            --query 'LoadBalancers[0].LoadBalancerArn' --output text --region $R 2>/dev/null || echo "")
+          if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
+            echo "Deleting listeners on ALB..."
+            LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+              --query 'Listeners[*].ListenerArn' --output text --region $R 2>/dev/null || echo "")
+            for L in $LISTENERS; do
+              aws elbv2 delete-listener --listener-arn "$L" --region $R 2>/dev/null || true
+            done
+            echo "Deleting ALB..."
+            aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $R || true
+            sleep 20
+          fi
+          for tg in ${P}-eureka-tg ${P}-gateway-tg; do
+            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" \
+              --query 'TargetGroups[0].TargetGroupArn' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && \
+              aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $R 2>/dev/null || true
+          done
+
+          echo "=== [2/8] Deleting ECS Services + Cluster ==="
+          for svc in ${P}-eureka-service ${P}-gateway-service ${P}-auth-service \
+            ${P}-ticket-service ${P}-comment-service ${P}-attachment-service ${P}-dashboard-service; do
+            aws ecs update-service --cluster ${P}-cluster --service "$svc" \
+              --desired-count 0 --region $R 2>/dev/null || true
+            aws ecs delete-service --cluster ${P}-cluster --service "$svc" \
+              --force --region $R 2>/dev/null || true
+          done
+          aws ecs delete-cluster --cluster ${P}-cluster --region $R 2>/dev/null || true
+
+          echo "=== [3/8] Deleting Security Groups ==="
+          for sg in ${P}-alb-sg ${P}-ecs-tasks-sg ${P}-rds-sg; do
+            SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$sg" \
+              --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && \
+              aws ec2 delete-security-group --group-id "$SG_ID" --region $R 2>/dev/null || true
+          done
+
+          echo "=== [4/8] Deleting CloudWatch Log Group ==="
+          aws logs delete-log-group --log-group-name "/ecs/${P}" --region $R 2>/dev/null || true
+
+          echo "=== [5/8] Deleting IAM Roles ==="
+          for role in ${P}-ecs-execution-role ${P}-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" \
+              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for p in $POLICIES; do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$p" 2>/dev/null || true
+            done
+            aws iam delete-role --role-name "$role" 2>/dev/null || true
+          done
+
+          echo "=== [6/8] Deleting RDS Subnet Group (NOT the RDS instance) ==="
+          aws rds delete-db-subnet-group \
+            --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
+
+          echo "=== [7/8] Deleting Secrets Manager Secret ==="
+          aws secretsmanager delete-secret --secret-id ${P}-db-credentials-v2 \
+            --force-delete-without-recovery --region $R 2>/dev/null || true
+
+          echo "=== [8/8] Removing orphaned VPCs (keeping ticketdesk-vpc) ==="
           VPCS=$(aws ec2 describe-vpcs \
             --query 'Vpcs[?IsDefault==`false`].VpcId' \
-            --output text --region us-east-1 || echo "")
+            --output text --region $R 2>/dev/null || echo "")
           for vpc in $VPCS; do
             [ -z "$vpc" ] || [ "$vpc" == "None" ] && continue
             VPC_NAME=$(aws ec2 describe-vpcs --vpc-ids "$vpc" \
               --query 'Vpcs[0].Tags[?Key==`Name`].Value | [0]' \
-              --output text --region us-east-1 2>/dev/null || echo "")
-            if [ "$VPC_NAME" == "ticketdesk-vpc" ]; then
-              echo "Keeping our VPC ($vpc) — will be imported into Terraform state."
+              --output text --region $R 2>/dev/null || echo "")
+            if [ "$VPC_NAME" == "${P}-vpc" ]; then
+              echo "Keeping ${P}-vpc ($vpc) — will import into Terraform."
               continue
             fi
-            echo "Deleting orphaned VPC: $vpc (Name=$VPC_NAME)"
+            echo "Deleting orphaned VPC: $vpc"
             SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" \
-              --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
-            for sn in $SUBNETS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 2>/dev/null || true; done
+              --query 'Subnets[*].SubnetId' --output text --region $R 2>/dev/null || echo "")
+            for sn in $SUBNETS; do aws ec2 delete-subnet --subnet-id "$sn" --region $R 2>/dev/null || true; done
             IGW=$(aws ec2 describe-internet-gateways \
               --filters "Name=attachment.vpc-id,Values=$vpc" \
-              --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
+              --query 'InternetGateways[0].InternetGatewayId' --output text --region $R 2>/dev/null || echo "")
             if [ -n "$IGW" ] && [ "$IGW" != "None" ]; then
-              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$vpc" --region us-east-1 || true
-              aws ec2 delete-internet-gateway --internet-gateway-id "$IGW" --region us-east-1 || true
+              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$vpc" --region $R 2>/dev/null || true
+              aws ec2 delete-internet-gateway --internet-gateway-id "$IGW" --region $R 2>/dev/null || true
             fi
             SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" \
-              --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region us-east-1 || echo "")
-            for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg" --region us-east-1 2>/dev/null || true; done
-            aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
+              --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region $R 2>/dev/null || echo "")
+            for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg" --region $R 2>/dev/null || true; done
+            aws ec2 delete-vpc --vpc-id "$vpc" --region $R 2>/dev/null || true
           done
-          echo "VPC cleanup done."
+          echo "=== Pre-cleanup complete! ==="
 
       # ─────────────────────────────────────────────────────
       # 4. Terraform Init
@@ -85,205 +149,82 @@ jobs:
         run: terraform init
 
       # ─────────────────────────────────────────────────────
-      # 5. Import ALL existing AWS resources into Terraform state
-      #    ✅ Exists  → imported → terraform apply just manages it (no error)
-      #    ✅ Missing → import fails silently (|| true) → terraform creates it
+      # 5. Import STATEFUL resources (VPC, ECR, RDS instance)
+      #    These must be preserved across runs.
       # ─────────────────────────────────────────────────────
-      - name: Import Existing Resources into Terraform State
+      - name: Import Stateful Resources into Terraform State
         if: env.AWS_KEY != ''
         working-directory: ./terraform
         run: |
           P="ticketdesk"
-          REGION="us-east-1"
-          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          R="us-east-1"
 
-          # ── VPC ──────────────────────────────────────────
-          echo "=== VPC Resources ==="
+          echo "=== Importing VPC + Subnets + IGW + Route Tables ==="
           VPC_ID=$(aws ec2 describe-vpcs \
             --filters "Name=tag:Name,Values=${P}-vpc" \
-            --query 'Vpcs[0].VpcId' --output text --region $REGION 2>/dev/null || echo "")
+            --query 'Vpcs[0].VpcId' --output text --region $R 2>/dev/null || echo "")
+
           if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
-            echo "Importing VPC: $VPC_ID"
+            echo "Found existing VPC: $VPC_ID — importing..."
             terraform import aws_vpc.main "$VPC_ID" 2>/dev/null || true
 
-            # Public Subnets
-            PUBLIC_SUBNETS=$(aws ec2 describe-subnets \
+            PUB_SUBNETS=$(aws ec2 describe-subnets \
               --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${P}-public-subnet-*" \
-              --query 'Subnets | sort_by(@, &Tags[?Key==`Name`].Value | [0])[*].SubnetId' \
-              --output text --region $REGION 2>/dev/null || echo "")
+              --query 'Subnets | sort_by(@, &AvailabilityZone)[*].SubnetId' \
+              --output text --region $R 2>/dev/null || echo "")
             i=0
-            for sn in $PUBLIC_SUBNETS; do
+            for sn in $PUB_SUBNETS; do
               terraform import "aws_subnet.public[$i]" "$sn" 2>/dev/null || true
               i=$((i+1))
             done
 
-            # Private Subnets
-            PRIVATE_SUBNETS=$(aws ec2 describe-subnets \
+            PRIV_SUBNETS=$(aws ec2 describe-subnets \
               --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${P}-private-subnet-*" \
-              --query 'Subnets | sort_by(@, &Tags[?Key==`Name`].Value | [0])[*].SubnetId' \
-              --output text --region $REGION 2>/dev/null || echo "")
+              --query 'Subnets | sort_by(@, &AvailabilityZone)[*].SubnetId' \
+              --output text --region $R 2>/dev/null || echo "")
             i=0
-            for sn in $PRIVATE_SUBNETS; do
+            for sn in $PRIV_SUBNETS; do
               terraform import "aws_subnet.private[$i]" "$sn" 2>/dev/null || true
               i=$((i+1))
             done
 
-            # Internet Gateway
             IGW=$(aws ec2 describe-internet-gateways \
               --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
-              --query 'InternetGateways[0].InternetGatewayId' --output text --region $REGION 2>/dev/null || echo "")
+              --query 'InternetGateways[0].InternetGatewayId' --output text --region $R 2>/dev/null || echo "")
             [ -n "$IGW" ] && [ "$IGW" != "None" ] && \
               terraform import aws_internet_gateway.igw "$IGW" 2>/dev/null || true
 
-            # Route Tables
-            PUBLIC_RT=$(aws ec2 describe-route-tables \
+            PUB_RT=$(aws ec2 describe-route-tables \
               --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${P}-public-rt" \
-              --query 'RouteTables[0].RouteTableId' --output text --region $REGION 2>/dev/null || echo "")
-            [ -n "$PUBLIC_RT" ] && [ "$PUBLIC_RT" != "None" ] && \
-              terraform import aws_route_table.public "$PUBLIC_RT" 2>/dev/null || true
+              --query 'RouteTables[0].RouteTableId' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$PUB_RT" ] && [ "$PUB_RT" != "None" ] && \
+              terraform import aws_route_table.public "$PUB_RT" 2>/dev/null || true
 
-            PRIVATE_RT=$(aws ec2 describe-route-tables \
+            PRIV_RT=$(aws ec2 describe-route-tables \
               --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${P}-private-rt" \
-              --query 'RouteTables[0].RouteTableId' --output text --region $REGION 2>/dev/null || echo "")
-            [ -n "$PRIVATE_RT" ] && [ "$PRIVATE_RT" != "None" ] && \
-              terraform import aws_route_table.private "$PRIVATE_RT" 2>/dev/null || true
-
-            # Route Table Associations
-            if [ -n "$PUBLIC_RT" ] && [ "$PUBLIC_RT" != "None" ]; then
-              i=0
-              for sn in $PUBLIC_SUBNETS; do
-                ASSOC=$(aws ec2 describe-route-tables \
-                  --route-table-ids "$PUBLIC_RT" \
-                  --query "RouteTables[0].Associations[?SubnetId=='$sn'].RouteTableAssociationId | [0]" \
-                  --output text --region $REGION 2>/dev/null || echo "")
-                [ -n "$ASSOC" ] && [ "$ASSOC" != "None" ] && \
-                  terraform import "aws_route_table_association.public[$i]" "$ASSOC" 2>/dev/null || true
-                i=$((i+1))
-              done
-            fi
-            if [ -n "$PRIVATE_RT" ] && [ "$PRIVATE_RT" != "None" ]; then
-              i=0
-              for sn in $PRIVATE_SUBNETS; do
-                ASSOC=$(aws ec2 describe-route-tables \
-                  --route-table-ids "$PRIVATE_RT" \
-                  --query "RouteTables[0].Associations[?SubnetId=='$sn'].RouteTableAssociationId | [0]" \
-                  --output text --region $REGION 2>/dev/null || echo "")
-                [ -n "$ASSOC" ] && [ "$ASSOC" != "None" ] && \
-                  terraform import "aws_route_table_association.private[$i]" "$ASSOC" 2>/dev/null || true
-                i=$((i+1))
-              done
-            fi
+              --query 'RouteTables[0].RouteTableId' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$PRIV_RT" ] && [ "$PRIV_RT" != "None" ] && \
+              terraform import aws_route_table.private "$PRIV_RT" 2>/dev/null || true
+          else
+            echo "No existing VPC found — Terraform will create a fresh one."
           fi
 
-          # ── Security Groups ───────────────────────────────
-          echo "=== Security Groups ==="
-          for sg_name in alb-sg ecs-tasks-sg rds-sg; do
-            tf_name=$(echo $sg_name | tr '-' '_' | sed 's/_sg$//')
-            SG_ID=$(aws ec2 describe-security-groups \
-              --filters "Name=group-name,Values=${P}-${sg_name}" \
-              --query 'SecurityGroups[0].GroupId' --output text --region $REGION 2>/dev/null || echo "")
-            if [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
-              echo "Importing security group: ${P}-${sg_name} → $SG_ID"
-              terraform import "aws_security_group.${tf_name}_sg" "$SG_ID" 2>/dev/null || true
-            fi
+          echo "=== Importing ECR Repositories ==="
+          for repo in eureka-server frontend api-gateway auth-service \
+                      ticket-service comment-service attachment-service dashboard-service; do
+            tf_name=$(echo $repo | tr '-' '_')
+            terraform import "aws_ecr_repository.${tf_name}" "${P}-${repo}" 2>/dev/null || true
           done
-          # Import ecs_tasks separately (different naming)
-          ECS_SG=$(aws ec2 describe-security-groups \
-            --filters "Name=group-name,Values=${P}-ecs-tasks-sg" \
-            --query 'SecurityGroups[0].GroupId' --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$ECS_SG" ] && [ "$ECS_SG" != "None" ] && \
-            terraform import aws_security_group.ecs_tasks "$ECS_SG" 2>/dev/null || true
-          ALB_SG=$(aws ec2 describe-security-groups \
-            --filters "Name=group-name,Values=${P}-alb-sg" \
-            --query 'SecurityGroups[0].GroupId' --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$ALB_SG" ] && [ "$ALB_SG" != "None" ] && \
-            terraform import aws_security_group.alb_sg "$ALB_SG" 2>/dev/null || true
-          RDS_SG=$(aws ec2 describe-security-groups \
-            --filters "Name=group-name,Values=${P}-rds-sg" \
-            --query 'SecurityGroups[0].GroupId' --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$RDS_SG" ] && [ "$RDS_SG" != "None" ] && \
-            terraform import aws_security_group.rds_sg "$RDS_SG" 2>/dev/null || true
 
-          # ── ALB + Target Groups + Listeners ───────────────
-          echo "=== ALB Resources ==="
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names ${P}-alb \
-            --query 'LoadBalancers[0].LoadBalancerArn' --output text --region $REGION 2>/dev/null || echo "")
-          if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
-            echo "Importing ALB: $ALB_ARN"
-            terraform import aws_lb.main "$ALB_ARN" 2>/dev/null || true
-
-            EUREKA_LISTENER=$(aws elbv2 describe-listeners \
-              --load-balancer-arn "$ALB_ARN" \
-              --query "Listeners[?Port==\`8761\`].ListenerArn | [0]" \
-              --output text --region $REGION 2>/dev/null || echo "")
-            [ -n "$EUREKA_LISTENER" ] && [ "$EUREKA_LISTENER" != "None" ] && \
-              terraform import aws_lb_listener.eureka "$EUREKA_LISTENER" 2>/dev/null || true
-
-            GW_LISTENER=$(aws elbv2 describe-listeners \
-              --load-balancer-arn "$ALB_ARN" \
-              --query "Listeners[?Port==\`80\`].ListenerArn | [0]" \
-              --output text --region $REGION 2>/dev/null || echo "")
-            [ -n "$GW_LISTENER" ] && [ "$GW_LISTENER" != "None" ] && \
-              terraform import aws_lb_listener.api_gateway "$GW_LISTENER" 2>/dev/null || true
-          fi
-
-          EUREKA_TG=$(aws elbv2 describe-target-groups --names ${P}-eureka-tg \
-            --query 'TargetGroups[0].TargetGroupArn' --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$EUREKA_TG" ] && [ "$EUREKA_TG" != "None" ] && \
-            terraform import aws_lb_target_group.eureka "$EUREKA_TG" 2>/dev/null || true
-
-          GW_TG=$(aws elbv2 describe-target-groups --names ${P}-gateway-tg \
-            --query 'TargetGroups[0].TargetGroupArn' --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$GW_TG" ] && [ "$GW_TG" != "None" ] && \
-            terraform import aws_lb_target_group.api_gateway "$GW_TG" 2>/dev/null || true
-
-          # ── ECR Repos ─────────────────────────────────────
-          echo "=== ECR Repositories ==="
-          terraform import aws_ecr_repository.eureka_server      ${P}-eureka-server      2>/dev/null || true
-          terraform import aws_ecr_repository.frontend           ${P}-frontend           2>/dev/null || true
-          terraform import aws_ecr_repository.api_gateway        ${P}-api-gateway        2>/dev/null || true
-          terraform import aws_ecr_repository.auth_service       ${P}-auth-service       2>/dev/null || true
-          terraform import aws_ecr_repository.ticket_service     ${P}-ticket-service     2>/dev/null || true
-          terraform import aws_ecr_repository.comment_service    ${P}-comment-service    2>/dev/null || true
-          terraform import aws_ecr_repository.attachment_service ${P}-attachment-service 2>/dev/null || true
-          terraform import aws_ecr_repository.dashboard_service  ${P}-dashboard-service  2>/dev/null || true
-
-          # ── CloudWatch Log Group ──────────────────────────
-          echo "=== CloudWatch Log Group ==="
-          terraform import aws_cloudwatch_log_group.ecs /ecs/${P} 2>/dev/null || true
-
-          # ── IAM Roles ─────────────────────────────────────
-          echo "=== IAM Roles ==="
-          terraform import aws_iam_role.ecs_execution_role ${P}-ecs-execution-role 2>/dev/null || true
-          terraform import aws_iam_role.ecs_task_role      ${P}-ecs-task-role      2>/dev/null || true
-          terraform import aws_iam_role_policy_attachment.ecs_execution_policy \
-            "${P}-ecs-execution-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
-          terraform import aws_iam_role_policy_attachment.ecs_ecr_policy \
-            "${P}-ecs-execution-role/arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" 2>/dev/null || true
-
-          # ── Secrets Manager ───────────────────────────────
-          echo "=== Secrets Manager ==="
-          SECRET_ARN=$(aws secretsmanager describe-secret \
-            --secret-id ${P}-db-credentials-v2 \
-            --query ARN --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$SECRET_ARN" ] && [ "$SECRET_ARN" != "None" ] && \
-            terraform import aws_secretsmanager_secret.db_secret "$SECRET_ARN" 2>/dev/null || true
-
-          # ── RDS ───────────────────────────────────────────
-          echo "=== RDS ==="
-          terraform import aws_db_subnet_group.main ${P}-db-subnet-group 2>/dev/null || true
-          RDS_ID=$(aws rds describe-db-instances \
+          echo "=== Importing RDS Instance (preserve DB data) ==="
+          RDS=$(aws rds describe-db-instances \
             --db-instance-identifier ${P}-db \
             --query 'DBInstances[0].DBInstanceIdentifier' \
-            --output text --region $REGION 2>/dev/null || echo "")
-          [ -n "$RDS_ID" ] && [ "$RDS_ID" != "None" ] && \
+            --output text --region $R 2>/dev/null || echo "")
+          [ -n "$RDS" ] && [ "$RDS" != "None" ] && \
             terraform import aws_db_instance.mysql ${P}-db 2>/dev/null || true
 
-          # ── ECS Cluster ───────────────────────────────────
-          echo "=== ECS Cluster ==="
-          terraform import aws_ecs_cluster.main ${P}-cluster 2>/dev/null || true
-
-          echo "=== ✅ All imports complete! ==="
+          echo "=== Import complete! ==="
 
       # ─────────────────────────────────────────────────────
       # 6. Terraform Apply
@@ -296,7 +237,7 @@ jobs:
           TF_VAR_aws_region: us-east-1
 
       # ─────────────────────────────────────────────────────
-      # 7. Build & Deploy React Frontend to S3
+      # 7. Build React Frontend
       # ─────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v3
@@ -316,14 +257,12 @@ jobs:
             --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" \
             --output text 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
           if [ -n "$BUCKET" ] && [ "$BUCKET" != "None" ]; then
-            echo "Deploying to s3://$BUCKET ..."
             aws s3 sync frontend/dist "s3://$BUCKET" --delete --region us-east-1
-          else
-            echo "No S3 bucket found — skipping."
+            echo "Frontend deployed to s3://$BUCKET"
           fi
 
       # ─────────────────────────────────────────────────────
-      # 8. Login to ECR & Push Docker Images
+      # 8. Login to ECR & Build/Push Docker Images
       # ─────────────────────────────────────────────────────
       - name: Login to Amazon ECR
         if: env.AWS_KEY != ''
@@ -346,8 +285,9 @@ jobs:
           push_image() {
             local name=$1 ctx=$2
             echo "--- Building ticketdesk-${name} ---"
-            docker build -t $ECR_REGISTRY/ticketdesk-${name}:${TAG} \
-                         -t $ECR_REGISTRY/ticketdesk-${name}:latest ${ctx}
+            docker build \
+              -t $ECR_REGISTRY/ticketdesk-${name}:${TAG} \
+              -t $ECR_REGISTRY/ticketdesk-${name}:latest ${ctx}
             docker push $ECR_REGISTRY/ticketdesk-${name}:${TAG}
             docker push $ECR_REGISTRY/ticketdesk-${name}:latest
           }
