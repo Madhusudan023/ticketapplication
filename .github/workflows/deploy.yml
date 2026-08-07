@@ -144,6 +144,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.5.0
+          terraform_wrapper: false   # ← prevents ::debug:: lines polluting output
 
       - name: Terraform Init
         if: env.AWS_KEY != ''
@@ -242,9 +243,12 @@ jobs:
         id: alb
         working-directory: ./terraform
         run: |
+          # terraform_wrapper=false means clean output — no ::debug:: lines
           ALB=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
-          echo "dns=$ALB" >> $GITHUB_OUTPUT
+          # Strip any stray whitespace/newlines
+          ALB=$(echo "$ALB" | tr -d '\r\n' | xargs)
           echo "ALB DNS: $ALB"
+          echo "dns=$ALB" >> $GITHUB_OUTPUT
 
       # ─────────────────────────────────────────────────────
       # 7. Build React Frontend with ALB API URL baked in
