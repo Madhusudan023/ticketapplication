@@ -1,33 +1,135 @@
-name: CI/CD Pipeline (100% Free Tier Deploy)
+name: Deploy Entire Application (ECS Fargate + ECR + RDS + S3)
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
-  ci-cd-pipeline:
-    name: Build, ECR Push & Free Tier EC2 Deploy
+  deploy:
+    name: Full Deployment Pipeline
     runs-on: ubuntu-latest
     env:
+      AWS_REGION: us-east-1
+      PROJECT_NAME: ticketdesk
       AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
     steps:
+      # ─────────────────────────────────────────────
+      # STEP 1: Checkout code
+      # ─────────────────────────────────────────────
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
+      # ─────────────────────────────────────────────
+      # STEP 2: Configure AWS credentials from GitHub Secrets
+      # ─────────────────────────────────────────────
+      - name: Configure AWS Credentials
+        if: env.AWS_KEY != ''
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'maven'
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
+      # ─────────────────────────────────────────────
+      # STEP 3: Pre-cleanup to avoid AlreadyExists errors
+      # ─────────────────────────────────────────────
+      - name: Pre-Cleanup Conflicting AWS Resources
+        if: env.AWS_KEY != ''
+        run: |
+          echo "=== Deleting old ECR repos to avoid AlreadyExists errors ==="
+          for repo in ticketdesk-eureka-server ticketdesk-frontend ticketdesk-api-gateway \
+            ticketdesk-auth-service ticketdesk-ticket-service ticketdesk-comment-service \
+            ticketdesk-attachment-service ticketdesk-dashboard-service; do
+            aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 2>/dev/null || true
+          done
+
+          echo "=== Deleting old IAM Roles ==="
+          for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" 2>/dev/null || true; done
+            aws iam delete-role --role-name "$role" 2>/dev/null || true
+          done
+
+          echo "=== Deleting old Secrets Manager secrets ==="
+          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 \
+            --force-delete-without-recovery --region us-east-1 2>/dev/null || true
+
+          echo "=== Deleting old DB subnet groups ==="
+          aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group \
+            --region us-east-1 2>/dev/null || true
+
+          echo "=== Deleting old ECS Services ==="
+          for svc in ticketdesk-eureka-service ticketdesk-gateway-service ticketdesk-auth-service \
+            ticketdesk-ticket-service ticketdesk-comment-service ticketdesk-attachment-service \
+            ticketdesk-dashboard-service; do
+            aws ecs update-service --cluster ticketdesk-cluster --service "$svc" \
+              --desired-count 0 --region us-east-1 2>/dev/null || true
+            aws ecs delete-service --cluster ticketdesk-cluster --service "$svc" \
+              --force --region us-east-1 2>/dev/null || true
+          done
+          aws ecs delete-cluster --cluster ticketdesk-cluster --region us-east-1 2>/dev/null || true
+
+          echo "=== Deleting old ALBs ==="
+          ALB_ARN=$(aws elbv2 describe-load-balancers --names ticketdesk-alb \
+            --query 'LoadBalancers[0].LoadBalancerArn' --output text --region us-east-1 2>/dev/null || echo "")
+          if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
+            LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" \
+              --query 'Listeners[*].ListenerArn' --output text --region us-east-1 || echo "")
+            for L in $LISTENERS; do aws elbv2 delete-listener --listener-arn "$L" --region us-east-1 || true; done
+            aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region us-east-1 || true
+            sleep 15
+          fi
+          for tg in ticketdesk-eureka-tg ticketdesk-gateway-tg; do
+            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" \
+              --query 'TargetGroups[0].TargetGroupArn' --output text --region us-east-1 2>/dev/null || echo "")
+            if [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ]; then
+              aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region us-east-1 || true
+            fi
+          done
+
+          echo "=== Deleting non-default VPCs ==="
+          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' \
+            --output text --region us-east-1 || echo "")
+          for vpc in $VPCS; do
+            [ -z "$vpc" ] || [ "$vpc" == "None" ] && continue
+            SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" \
+              --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
+            for sn in $SUBNETS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 2>/dev/null || true; done
+            IGW=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" \
+              --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
+            if [ -n "$IGW" ] && [ "$IGW" != "None" ]; then
+              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$vpc" --region us-east-1 || true
+              aws ec2 delete-internet-gateway --internet-gateway-id "$IGW" --region us-east-1 || true
+            fi
+            SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" \
+              --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region us-east-1 || echo "")
+            for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg" --region us-east-1 2>/dev/null || true; done
+            aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
+          done
+          echo "=== Pre-cleanup complete! ==="
+
+      # ─────────────────────────────────────────────
+      # STEP 4: Terraform – provision all AWS infra
+      # ─────────────────────────────────────────────
+      - name: Setup Terraform
+        if: env.AWS_KEY != ''
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init & Apply
+        if: env.AWS_KEY != ''
+        working-directory: ./terraform
+        run: |
+          terraform init
+          terraform apply -auto-approve
+        env:
+          TF_VAR_aws_region: us-east-1
+
+      # ─────────────────────────────────────────────
+      # STEP 5: Build React frontend
+      # ─────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
@@ -39,134 +141,105 @@ jobs:
           npm ci
           npm run build
 
-      - name: Get Short Git Commit SHA
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Configure AWS Credentials from GitHub Secrets
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Pre-Cleanup Existing AWS Conflicts (Free Quota Sweep)
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+      # ─────────────────────────────────────────────
+      # STEP 6: Deploy frontend to S3
+      # ─────────────────────────────────────────────
+      - name: Deploy Frontend to S3
+        if: env.AWS_KEY != ''
         run: |
-          echo "=== 1. Deleting ECR Repositories ==="
-          REPOS=("ticketdesk-eureka-server" "ticketdesk-frontend" "ticketdesk-api-gateway" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
-          for repo in "${REPOS[@]}"; do
-            aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 || true
-          done
-
-          echo "=== 2. Deleting IAM Roles & Secrets ==="
-          for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
-            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
-            for p in $POLICIES; do aws iam detach-role-policy --role-name "$role" --policy-arn "$p" || true; done
-            aws iam delete-role --role-name "$role" || true
-          done
-          aws secretsmanager delete-secret --secret-id ticketdesk-db-credentials-v2 --force-delete-without-recovery --region us-east-1 || true
-          aws rds delete-db-subnet-group --db-subnet-group-name ticketdesk-db-subnet-group --region us-east-1 || true
-
-          echo "=== 3. Deleting Non-Default VPCs ==="
-          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region us-east-1 || echo "")
-          for vpc in $VPCS; do
-            if [ -n "$vpc" ] && [ "$vpc" != "None" ]; then
-              echo "Cleaning up non-default VPC: $vpc..."
-              SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region us-east-1 || echo "")
-              for sn in $SUBNET_IDS; do aws ec2 delete-subnet --subnet-id "$sn" --region us-east-1 || true; done
-
-              IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" --query 'InternetGateways[0].InternetGatewayId' --output text --region us-east-1 || echo "")
-              if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
-                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$vpc" --region us-east-1 || true
-                aws ec2 delete-internet-gateway --internet-gateway-id "$IGW_ID" --region us-east-1 || true
-              fi
-
-              SG_IDS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text --region us-east-1 || echo "")
-              for sg in $SG_IDS; do aws ec2 delete-security-group --group-id "$sg" --region us-east-1 || true; done
-
-              aws ec2 delete-vpc --vpc-id "$vpc" --region us-east-1 || true
-            fi
-          done
-          echo "Pre-cleanup complete!"
-
-      - name: Setup Terraform
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.0
-
-      - name: Terraform Init & Apply (100% Free Tier Architecture)
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
-        working-directory: ./terraform
-        run: |
-          terraform init
-          terraform apply -auto-approve
-
-      - name: Deploy Frontend to S3 Bucket
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
-        run: |
-          echo "=== Deploying React Frontend to S3 Bucket ==="
-          BUCKET_NAME=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" --output text --region us-east-1 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
-          if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ] && [ -d "frontend/dist" ]; then
-            echo "Syncing frontend/dist to s3://$BUCKET_NAME..."
-            aws s3 sync frontend/dist "s3://$BUCKET_NAME" --delete --region us-east-1
-            echo "Frontend deployed successfully to S3 bucket: $BUCKET_NAME!"
+          BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" \
+            --output text 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
+          if [ -n "$BUCKET" ] && [ "$BUCKET" != "None" ]; then
+            echo "Deploying to s3://$BUCKET ..."
+            aws s3 sync frontend/dist "s3://$BUCKET" --delete --region us-east-1
+            echo "Frontend deployed!"
+          else
+            echo "No ticketdesk-frontend bucket found, skipping."
           fi
 
-      - name: Log in to Amazon ECR
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+      # ─────────────────────────────────────────────
+      # STEP 7: Login to ECR
+      # ─────────────────────────────────────────────
+      - name: Login to Amazon ECR
+        if: env.AWS_KEY != ''
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build & Push Docker Images to ECR
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != '' && steps.login-ecr.outputs.registry != ''
+      # ─────────────────────────────────────────────
+      # STEP 8: Build & push all Docker images to ECR
+      # ─────────────────────────────────────────────
+      - name: Set up JDK 17 (for Maven builds)
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build & Push All Docker Images to ECR
+        if: env.AWS_KEY != ''
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
         run: |
-          echo "=== Building and Pushing All Docker Images to ECR ==="
-          docker build -t $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-frontend:latest ./frontend
-          docker push $ECR_REGISTRY/ticketdesk-frontend:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-frontend:latest
+          TAG=$(git rev-parse --short HEAD)
+          echo "Using image tag: $TAG"
 
-          docker build -t $ECR_REGISTRY/ticketdesk-api-gateway:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-api-gateway:latest ./backend/api-gateway
-          docker push $ECR_REGISTRY/ticketdesk-api-gateway:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-api-gateway:latest
+          build_and_push() {
+            local name=$1
+            local context=$2
+            echo "--- Building $name ---"
+            docker build -t $ECR_REGISTRY/ticketdesk-${name}:${TAG} \
+                         -t $ECR_REGISTRY/ticketdesk-${name}:latest \
+                         ${context}
+            docker push $ECR_REGISTRY/ticketdesk-${name}:${TAG}
+            docker push $ECR_REGISTRY/ticketdesk-${name}:latest
+            echo "--- $name pushed ---"
+          }
 
-          docker build -t $ECR_REGISTRY/ticketdesk-auth-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-auth-service:latest ./backend/auth-service
-          docker push $ECR_REGISTRY/ticketdesk-auth-service:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-auth-service:latest
+          build_and_push "eureka-server"      "./backend/eureka-server"
+          build_and_push "api-gateway"        "./backend/api-gateway"
+          build_and_push "auth-service"       "./backend/auth-service"
+          build_and_push "ticket-service"     "./backend/ticket-service"
+          build_and_push "comment-service"    "./backend/comment-service"
+          build_and_push "attachment-service" "./backend/attachment-service"
+          build_and_push "dashboard-service"  "./backend/dashboard-service"
+          build_and_push "frontend"           "./frontend"
 
-          docker build -t $ECR_REGISTRY/ticketdesk-ticket-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-ticket-service:latest ./backend/ticket-service
-          docker push $ECR_REGISTRY/ticketdesk-ticket-service:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-ticket-service:latest
-
-          docker build -t $ECR_REGISTRY/ticketdesk-comment-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-comment-service:latest ./backend/comment-service
-          docker push $ECR_REGISTRY/ticketdesk-comment-service:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-comment-service:latest
-
-          docker build -t $ECR_REGISTRY/ticketdesk-attachment-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-attachment-service:latest ./backend/attachment-service
-          docker push $ECR_REGISTRY/ticketdesk-attachment-service:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-attachment-service:latest
-
-          docker build -t $ECR_REGISTRY/ticketdesk-dashboard-service:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-dashboard-service:latest ./backend/dashboard-service
-          docker push $ECR_REGISTRY/ticketdesk-dashboard-service:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-dashboard-service:latest
-
-          docker build -t $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG -t $ECR_REGISTRY/ticketdesk-eureka-server:latest ./backend/eureka-server
-          docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
-          docker push $ECR_REGISTRY/ticketdesk-eureka-server:latest
-
-      - name: 100% Free Tier Deployment Summary
-        if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
+      # ─────────────────────────────────────────────
+      # STEP 9: Force ECS to redeploy with new images
+      # ─────────────────────────────────────────────
+      - name: Force ECS Redeployment (All Services)
+        if: env.AWS_KEY != ''
         run: |
-          echo "=========================================================="
-          echo " 🎉 100% AWS FREE TIER DEPLOYMENT COMPLETED SUCCESSFULLY!"
-          echo "=========================================================="
-          echo " - EC2 t3.micro Instance   : 100% Free Tier (750 hrs/month)"
-          echo " - RDS MySQL db.t3.micro   : 100% Free Tier (750 hrs/month)"
-          echo " - Amazon ECR Repositories : 100% Free Tier (500 MB/month)"
-          echo " - Frontend S3 Bucket      : 100% Free Tier (5 GB/month)"
-          echo "=========================================================="
+          echo "=== Forcing ECS redeployment for all microservices ==="
+          CLUSTER="ticketdesk-cluster"
+          SERVICES=(
+            "ticketdesk-eureka-service"
+            "ticketdesk-gateway-service"
+            "ticketdesk-auth-service"
+            "ticketdesk-ticket-service"
+            "ticketdesk-comment-service"
+            "ticketdesk-attachment-service"
+            "ticketdesk-dashboard-service"
+          )
+          for svc in "${SERVICES[@]}"; do
+            echo "Redeploying: $svc"
+            aws ecs update-service --cluster "$CLUSTER" --service "$svc" \
+              --force-new-deployment --region us-east-1 || true
+          done
+          echo "=== All services redeployed! ==="
+
+      # ─────────────────────────────────────────────
+      # STEP 10: Print access URLs
+      # ─────────────────────────────────────────────
+      - name: Print Access URLs
+        if: env.AWS_KEY != ''
+        working-directory: ./terraform
+        run: |
+          echo "======================================================"
+          echo " 🎉 DEPLOYMENT COMPLETE! Access your application at:"
+          echo "======================================================"
+          terraform output -raw frontend_s3_url   2>/dev/null && echo " (Frontend S3 URL)" || true
+          terraform output -raw eureka_dashboard_url 2>/dev/null && echo " (Eureka Dashboard)" || true
+          terraform output -raw api_gateway_url   2>/dev/null && echo " (API Gateway)" || true
+          echo "======================================================"

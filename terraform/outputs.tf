@@ -1,43 +1,43 @@
-output "ec2_public_ip" {
-  description = "Public IP of the Free Tier EC2 Instance"
-  value       = aws_instance.app_server.public_ip
+output "alb_dns_name" {
+  description = "ALB DNS Name (main entry point)"
+  value       = aws_lb.main.dns_name
 }
 
-output "free_tier_eureka_url" {
-  description = "Eureka Dashboard URL on Free Tier EC2"
-  value       = "http://${aws_instance.app_server.public_ip}:8761"
+output "eureka_dashboard_url" {
+  description = "Eureka Service Discovery Dashboard"
+  value       = "http://${aws_lb.main.dns_name}:8761"
 }
 
-output "free_tier_api_gateway_url" {
-  description = "API Gateway URL on Free Tier EC2"
-  value       = "http://${aws_instance.app_server.public_ip}:8080"
+output "api_gateway_url" {
+  description = "API Gateway URL (all microservice API calls)"
+  value       = "http://${aws_lb.main.dns_name}"
 }
 
 output "frontend_s3_url" {
-  description = "Frontend S3 Website URL"
+  description = "React Frontend Website URL"
   value       = "http://${aws_s3_bucket_website_configuration.frontend.website_endpoint}"
 }
 
 output "rds_endpoint" {
-  description = "RDS Database Endpoint"
+  description = "RDS MySQL Endpoint"
   value       = aws_db_instance.mysql.endpoint
 }
 
-output "secretsmanager_secret_arn" {
-  description = "Secrets Manager Secret ARN for DB credentials"
-  value       = aws_secretsmanager_secret.db_secret.arn
+output "ecs_cluster_name" {
+  description = "ECS Cluster Name"
+  value       = aws_ecs_cluster.main.name
 }
 
 output "ecr_repository_urls" {
-  description = "ECR Repository URLs for containers"
+  description = "ECR Repository URLs"
   value = {
     eureka_server      = aws_ecr_repository.eureka_server.repository_url
-    frontend           = aws_ecr_repository.frontend.repository_url
     api_gateway        = aws_ecr_repository.api_gateway.repository_url
     auth_service       = aws_ecr_repository.auth_service.repository_url
     ticket_service     = aws_ecr_repository.ticket_service.repository_url
     comment_service    = aws_ecr_repository.comment_service.repository_url
     attachment_service = aws_ecr_repository.attachment_service.repository_url
     dashboard_service  = aws_ecr_repository.dashboard_service.repository_url
+    frontend           = aws_ecr_repository.frontend.repository_url
   }
 }
