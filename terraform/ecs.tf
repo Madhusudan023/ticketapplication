@@ -28,7 +28,6 @@ resource "aws_iam_role_policy_attachment" "ecs_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow ECS execution role to pull from ECR
 resource "aws_iam_role_policy_attachment" "ecs_execution_ecr" {
   role       = aws_iam_role.ecs_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
@@ -57,7 +56,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 }
 
 # ─────────────────────────────────────────────────────────────
-#  EUREKA SERVER — ECS FARGATE TASK DEFINITION
+# 1. EUREKA SERVER
 # ─────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "eureka" {
   family                   = "${var.project_name}-eureka-task"
@@ -73,19 +72,8 @@ resource "aws_ecs_task_definition" "eureka" {
       name      = "eureka-server"
       image     = "${aws_ecr_repository.eureka_server.repository_url}:latest"
       essential = true
-      portMappings = [
-        {
-          containerPort = 8761
-          hostPort      = 8761
-          protocol      = "tcp"
-        }
-      ]
-      environment = [
-        {
-          name  = "SPRING_PROFILES_ACTIVE"
-          value = "docker"
-        }
-      ]
+      portMappings = [{ containerPort = 8761, hostPort = 8761, protocol = "tcp" }]
+      environment = [{ name = "SPRING_PROFILES_ACTIVE", value = "docker" }]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -99,18 +87,12 @@ resource "aws_ecs_task_definition" "eureka" {
   ])
 }
 
-# ─────────────────────────────────────────────────────────────
-#  EUREKA SERVER — ECS FARGATE SERVICE
-# ─────────────────────────────────────────────────────────────
 resource "aws_ecs_service" "eureka" {
-  name            = "${var.project_name}-eureka-service"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.eureka.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  # Wait for ECR image to be pushed before deploying
-  # This prevents CannotPullContainerError on first deploy
+  name                 = "${var.project_name}-eureka-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.eureka.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
   force_new_deployment = true
 
   network_configuration {
@@ -130,5 +112,350 @@ resource "aws_ecs_service" "eureka" {
     aws_lb_listener.eureka,
     aws_iam_role_policy_attachment.ecs_execution,
     aws_iam_role_policy_attachment.ecs_execution_ecr,
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 2. API GATEWAY
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "api_gateway" {
+  family                   = "${var.project_name}-gateway-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "api-gateway"
+      image     = "${aws_ecr_repository.api_gateway.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "gateway"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "api_gateway" {
+  name                 = "${var.project_name}-gateway-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.api_gateway.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api_gateway.arn
+    container_name   = "api-gateway"
+    container_port   = 8080
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_lb_listener.api_gateway
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 3. AUTH SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "auth_service" {
+  family                   = "${var.project_name}-auth-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "auth-service"
+      image     = "${aws_ecr_repository.auth_service.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8089, hostPort = 8089, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" },
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "auth"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "auth_service" {
+  name                 = "${var.project_name}-auth-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.auth_service.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_db_instance.mysql
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 4. TICKET SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "ticket_service" {
+  family                   = "${var.project_name}-ticket-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "ticket-service"
+      image     = "${aws_ecr_repository.ticket_service.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8082, hostPort = 8082, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" },
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ticket"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "ticket_service" {
+  name                 = "${var.project_name}-ticket-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.ticket_service.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_db_instance.mysql
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 5. COMMENT SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "comment_service" {
+  family                   = "${var.project_name}-comment-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "comment-service"
+      image     = "${aws_ecr_repository.comment_service.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8084, hostPort = 8084, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" },
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "comment"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "comment_service" {
+  name                 = "${var.project_name}-comment-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.comment_service.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_db_instance.mysql
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 6. ATTACHMENT SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "attachment_service" {
+  family                   = "${var.project_name}-attachment-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "attachment-service"
+      image     = "${aws_ecr_repository.attachment_service.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8085, hostPort = 8085, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" },
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "attachment"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "attachment_service" {
+  name                 = "${var.project_name}-attachment-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.attachment_service.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_db_instance.mysql
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────
+# 7. DASHBOARD SERVICE
+# ─────────────────────────────────────────────────────────────
+resource "aws_ecs_task_definition" "dashboard_service" {
+  family                   = "${var.project_name}-dashboard-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "dashboard-service"
+      image     = "${aws_ecr_repository.dashboard_service.repository_url}:latest"
+      essential = true
+      portMappings = [{ containerPort = 8087, hostPort = 8087, protocol = "tcp" }]
+      environment = [
+        { name = "EUREKA_URI", value = "http://${aws_lb.main.dns_name}:8761/eureka/" },
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:mysql://${aws_db_instance.mysql.endpoint}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = random_password.db_password.result }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.project_name}"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "dashboard"
+          "awslogs-create-group"  = "true"
+        }
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "dashboard_service" {
+  name                 = "${var.project_name}-dashboard-service"
+  cluster              = aws_ecs_cluster.main.id
+  task_definition      = aws_ecs_task_definition.dashboard_service.arn
+  desired_count        = 1
+  launch_type          = "FARGATE"
+  force_new_deployment = true
+
+  network_configuration {
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [
+    aws_ecs_service.eureka,
+    aws_db_instance.mysql
   ]
 }

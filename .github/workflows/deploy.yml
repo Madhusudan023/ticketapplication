@@ -113,13 +113,18 @@ jobs:
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:$IMAGE_TAG
           docker push $ECR_REGISTRY/ticketdesk-eureka-server:latest
 
-      - name: Force New ECS Deployment (Update Service)
+      - name: Force New ECS Deployment (Update All Services)
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
-          echo "Forcing new ECS deployment to pull latest ECR image..."
-          aws ecs update-service \
-            --cluster ticketdesk-cluster \
-            --service ticketdesk-eureka-service \
-            --force-new-deployment \
-            --region us-east-1 || true
-          echo "ECS deployment triggered successfully!"
+          echo "=== Triggering ECS Fargate deployment for all microservices ==="
+          SERVICES=("ticketdesk-eureka-service" "ticketdesk-gateway-service" "ticketdesk-auth-service" "ticketdesk-ticket-service" "ticketdesk-comment-service" "ticketdesk-attachment-service" "ticketdesk-dashboard-service")
+
+          for service in "${SERVICES[@]}"; do
+            echo "Updating ECS service: $service..."
+            aws ecs update-service \
+              --cluster ticketdesk-cluster \
+              --service "$service" \
+              --force-new-deployment \
+              --region us-east-1 || true
+          done
+          echo "All 7 ECS microservices triggered successfully!"
