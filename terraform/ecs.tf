@@ -45,13 +45,6 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLOUDWATCH LOG GROUP
-# ──────────────────────────────────────────────────────────────────────────────
-resource "aws_cloudwatch_log_group" "ecs" {
-  name              = "/ecs/${var.project_name}"
-  retention_in_days = 7
-}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # LOCAL VARS: reusable log config

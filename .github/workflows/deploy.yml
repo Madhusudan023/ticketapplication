@@ -44,6 +44,9 @@ jobs:
             aws ecr delete-repository --repository-name "$repo" --force --region us-east-1 2>/dev/null || true
           done
 
+          echo "=== Deleting old CloudWatch Log Group ==="
+          aws logs delete-log-group --log-group-name "/ecs/ticketdesk" --region us-east-1 2>/dev/null || true
+
           echo "=== Deleting old IAM Roles ==="
           for role in ticketdesk-ecs-execution-role ticketdesk-ecs-task-role; do
             POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
