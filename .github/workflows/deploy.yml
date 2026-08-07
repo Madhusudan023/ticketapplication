@@ -84,11 +84,11 @@ jobs:
         if: github.ref == 'refs/heads/main' && env.AWS_KEY != ''
         run: |
           echo "=== Deploying React Frontend to S3 Bucket ==="
-          BUCKET_NAME=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" --output text --region us-east-1 || echo "")
+          BUCKET_NAME=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'ticketdesk-frontend')].Name" --output text --region us-east-1 2>/dev/null | tr '\t' '\n' | head -n 1 || echo "")
           if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ] && [ -d "frontend/dist" ]; then
             echo "Syncing frontend/dist to s3://$BUCKET_NAME..."
             aws s3 sync frontend/dist "s3://$BUCKET_NAME" --delete --region us-east-1
-            echo "Frontend deployed successfully to S3!"
+            echo "Frontend deployed successfully to S3 bucket: $BUCKET_NAME!"
           fi
 
       - name: Log in to Amazon ECR
