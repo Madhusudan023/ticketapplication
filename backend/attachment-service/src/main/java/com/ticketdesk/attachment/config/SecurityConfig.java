@@ -1,4 +1,4 @@
-package com.ticketdesk.attachment.config;
+﻿package com.ticketdesk.attachment.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -6,12 +6,13 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import java.util.List;
-
+/**
+ * Security configuration.
+ * CORS is handled entirely by the API Gateway — do NOT add CORS here.
+ * Adding CORS in both Gateway and the service causes duplicate
+ * 'Access-Control-Allow-Origin' headers which browsers reject.
+ */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
@@ -20,22 +21,11 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .cors(AbstractHttpConfigurer::disable)   // CORS owned by API Gateway
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/attachments/**", "/actuator/**").permitAll()
                 .anyRequest().authenticated()
             );
         return http.build();
-    }
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("*"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
-        return source;
     }
 }
