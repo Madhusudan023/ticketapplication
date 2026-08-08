@@ -462,8 +462,8 @@ jobs:
       - name: Wait for ECS Services + Health Check
         if: env.AWS_KEY != ''
         run: |
-          echo "=== Waiting 90s for ECS services to start ==="
-          sleep 90
+          echo "=== Waiting 100s for ECS services to start ==="
+          sleep 100
 
           ALB_DNS=$(aws elbv2 describe-load-balancers \
             --names ticketdesk-alb \

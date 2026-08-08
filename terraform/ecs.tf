@@ -116,6 +116,7 @@ resource "aws_ecs_service" "eureka" {
     container_name   = "eureka-server"
     container_port   = 8761
   }
+  health_check_grace_period_seconds = 120
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy]
 }
@@ -158,6 +159,7 @@ resource "aws_ecs_service" "api_gateway" {
     container_name   = "api-gateway"
     container_port   = 8080
   }
+  health_check_grace_period_seconds = 120
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.api_gateway, aws_ecs_service.eureka]
 }
