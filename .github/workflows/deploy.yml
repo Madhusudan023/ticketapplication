@@ -470,7 +470,7 @@ jobs:
             --query 'LoadBalancers[0].DNSName' \
             --output text --region us-east-1 2>/dev/null || echo "")
 
-          echo "=== Testing login endpoint: http://$ALB_DNS/api/v1/auth/login ==="
+          SUCCESS=0
           for i in $(seq 1 6); do
             RESP=$(curl -s -X POST "http://$ALB_DNS/api/v1/auth/login" \
               -H "Content-Type: application/json" \
@@ -479,32 +479,33 @@ jobs:
             echo "  [$i] Response: $RESP"
             if echo "$RESP" | grep -q '"success":true'; then
               echo "  ✅✅✅ LOGIN SUCCESS — Application is FULLY WORKING! ✅✅✅"
+              SUCCESS=1
               break
             fi
-            [ $i -lt 6 ] && echo "  Waiting 30s..." && sleep 30
+            [ $i -lt 6 ] && echo "  Waiting 20s..." && sleep 20
           done
 
-          echo ""
-          echo "=== Last 30 lines of auth-service CloudWatch logs ==="
-          LOG_STREAM=$(aws logs describe-log-streams \
-            --log-group-name "/ecs/ticketdesk" \
-            --log-stream-name-prefix "auth/" \
-            --order-by LastEventTime \
-            --descending \
-            --region us-east-1 \
-            --query 'logStreams[0].logStreamName' \
-            --output text 2>/dev/null || echo "")
-          if [ -n "$LOG_STREAM" ] && [ "$LOG_STREAM" != "None" ]; then
-            echo "  Log stream: $LOG_STREAM"
-            aws logs get-log-events \
+          if [ $SUCCESS -eq 0 ]; then
+            echo "❌ LOGIN TEST FAILED!"
+            LOG_STREAM=$(aws logs describe-log-streams \
               --log-group-name "/ecs/ticketdesk" \
-              --log-stream-name "$LOG_STREAM" \
-              --limit 30 \
-              --query 'events[*].message' \
-              --output text \
-              --region us-east-1 2>/dev/null | tail -30
-          else
-            echo "  No auth log stream found yet (service may still be starting)"
+              --log-stream-name-prefix "auth/" \
+              --order-by LastEventTime \
+              --descending \
+              --region us-east-1 \
+              --query 'logStreams[0].logStreamName' \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$LOG_STREAM" ] && [ "$LOG_STREAM" != "None" ]; then
+              echo "=== CloudWatch logs ($LOG_STREAM) ==="
+              aws logs get-log-events \
+                --log-group-name "/ecs/ticketdesk" \
+                --log-stream-name "$LOG_STREAM" \
+                --limit 50 \
+                --query 'events[*].message' \
+                --output text \
+                --region us-east-1 2>/dev/null | tail -50
+            fi
+            exit 1
           fi
 
       # ──────────────────────────────────────────────────────

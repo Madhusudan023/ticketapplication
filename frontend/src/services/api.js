@@ -127,7 +127,7 @@ export const ApiService = {
 
   // ── Health ────────────────────────────────────────────────────────────────
   checkHealth: async () => {
-    const res = await axios.get('/actuator/health');
+    const res = await http.get('/actuator/health');
     return res.data;
   },
 };

@@ -4,33 +4,31 @@
 spring:
   application:
     name: ticket-service
+  cloud:
+    inetutils:
+      preferred-networks:
+        - 10\.0\.
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true}
-    username: ${SPRING_DATASOURCE_USERNAME:root}
-    password: ${SPRING_DATASOURCE_PASSWORD:Pranuu@0903}
+    username: ${SPRING_DATASOURCE_USERNAME:admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:TicketDeskPass123!}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
-    properties:
-      hibernate:
-        # dialect: auto-detected
+    show-sql: false
 
 eureka:
   client:
     serviceUrl:
-      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka/}
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:${EUREKA_URI:http://localhost:8761/eureka/}}
+    fetchRegistry: true
+    registerWithEureka: true
   instance:
     preferIpAddress: true
-    ip-address: ${ECS_TASK_IP:127.0.0.1}
-    instance-id: ${spring.application.name}:${ECS_TASK_IP:127.0.0.1}:${server.port}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
-  endpoint:
-    health:
-      show-details: always
+        include: health,info
