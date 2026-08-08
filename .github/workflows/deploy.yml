@@ -14,12 +14,44 @@ jobs:
       P: ticketdesk
       AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
+    permissions:
+      actions: write
+      contents: read
     steps:
       # ──────────────────────────────────────────────────────
       # 1. Checkout
       # ──────────────────────────────────────────────────────
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # ──────────────────────────────────────────────────────
+      # 1b. Cleanup Old GitHub Workflow Runs
+      # ──────────────────────────────────────────────────────
+      - name: Delete Old GitHub Workflow Runs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            try {
+              const res = await github.rest.actions.listWorkflowRunsForRepo({ owner, repo, per_page: 100 });
+              const runs = res.data.workflow_runs;
+              const deployRuns = runs.filter(r => r.name.toLowerCase().includes("deploy")).sort((a, b) => b.id - a.id);
+              const keepDeployIds = new Set(deployRuns.slice(0, 2).map(r => r.id));
+              for (const run of runs) {
+                if (run.name.toLowerCase().includes("destroy") || keepDeployIds.has(run.id)) {
+                  console.log(`KEEPING: [${run.id}] ${run.name}`);
+                  continue;
+                }
+                console.log(`DELETING: [${run.id}] ${run.name}`);
+                try {
+                  await github.rest.actions.deleteWorkflowRun({ owner, repo, run_id: run.id });
+                } catch (err) {
+                  console.log(`Could not delete ${run.id}: ${err.message}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Cleanup error: ${e.message}`);
+            }
 
       # ──────────────────────────────────────────────────────
       # 2. AWS Credentials
