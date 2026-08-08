@@ -229,10 +229,42 @@ jobs:
 
           echo "=== Import complete ==="
 
-      - name: Terraform Apply
+      - name: Terraform Phase 1 - Create S3 Bucket (without policy)
         if: env.AWS_KEY != ''
         working-directory: ./terraform
-        run: terraform apply -auto-approve
+        run: |
+          echo "=== Phase 1: Create S3 bucket + disable Block Public Access ==="
+          # Create bucket and public_access_block FIRST (skip the policy for now)
+          terraform apply -auto-approve \
+            -target=random_id.bucket_suffix \
+            -target=aws_s3_bucket.frontend \
+            -target=aws_s3_bucket_website_configuration.frontend \
+            -target=aws_s3_bucket_cors_configuration.frontend \
+            -target=aws_s3_bucket_public_access_block.frontend \
+            2>/dev/null || true
+
+          # Now disable Block Public Access on whatever bucket exists (old OR new)
+          S3_BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'ticketdesk-frontend')].Name | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -n "$S3_BUCKET" ] && [ "$S3_BUCKET" != "None" ]; then
+            echo "  Disabling Block Public Access on: $S3_BUCKET"
+            aws s3api put-public-access-block \
+              --bucket "$S3_BUCKET" \
+              --public-access-block-configuration \
+                "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false" \
+              --region us-east-1
+            echo "  ✅ Block Public Access DISABLED on $S3_BUCKET"
+          fi
+        env:
+          TF_VAR_aws_region: us-east-1
+
+      - name: Terraform Phase 2 - Full Apply (all resources including S3 policy)
+        if: env.AWS_KEY != ''
+        working-directory: ./terraform
+        run: |
+          echo "=== Phase 2: Full terraform apply ==="
+          terraform apply -auto-approve
         env:
           TF_VAR_aws_region: us-east-1
 
