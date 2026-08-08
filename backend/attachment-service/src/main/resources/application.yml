@@ -1,4 +1,4 @@
-server:
+﻿server:
   port: 8085
 
 spring:
@@ -27,6 +27,8 @@ eureka:
       defaultZone: ${EUREKA_URI:http://localhost:8761/eureka/}
   instance:
     preferIpAddress: true
+    ip-address: ${ECS_TASK_IP:127.0.0.1}
+    instance-id: ${spring.application.name}:${ECS_TASK_IP:127.0.0.1}:${server.port}
 
 app:
   upload:
