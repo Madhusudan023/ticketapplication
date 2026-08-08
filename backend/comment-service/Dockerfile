@@ -5,12 +5,15 @@ COPY src ./src
 RUN apk add --no-cache maven && mvn clean package -DskipTests
 
 FROM eclipse-temurin:17-jre-alpine
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /build/target/*.jar app.jar
+# Copy entrypoint BEFORE switching to non-root user so chmod works
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh \
+ && addgroup -S appgroup \
+ && adduser -S appuser -G appgroup \
+ && chown -R appuser:appgroup /app
 USER appuser
 EXPOSE 8084
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
