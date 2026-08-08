@@ -490,54 +490,45 @@ jobs:
           if [ $SUCCESS -eq 0 ]; then
             echo "❌ LOGIN TEST FAILED after all retries"
             echo ""
+            echo "=== Eureka Registered Apps (what IPs are registered) ==="
+            curl -s -H "Accept: application/json" \
+              "http://$ALB_DNS:8761/eureka/apps" --max-time 5 2>/dev/null \
+              | python3 -c "import sys,json; data=json.load(sys.stdin); [print(f\"  {a['name']}: {i['ipAddr']}:{i['port']['$']}\") for a in data.get('applications',{}).get('application',[]) for i in (a['instance'] if isinstance(a['instance'],list) else [a['instance']])]" 2>/dev/null \
+              || echo "  Could not reach Eureka"
+
+            echo ""
             echo "=== ECS Service Events ==="
             for svc in ticketdesk-eureka-service ticketdesk-gateway-service ticketdesk-auth-service; do
               echo "--- $svc ---"
               aws ecs describe-services \
-                --cluster ticketdesk-cluster \
-                --services "$svc" \
-                --region us-east-1 \
-                --query 'services[0].events[0:5]' \
-                --output table 2>/dev/null || true
+                --cluster ticketdesk-cluster --services "$svc" --region us-east-1 \
+                --query 'services[0].events[0:5]' --output table 2>/dev/null || true
             done
-            echo ""
-            echo "=== CloudWatch: auth-service logs ==="
-            LOG_STREAM=$(aws logs describe-log-streams \
-              --log-group-name "/ecs/ticketdesk" \
-              --log-stream-name-prefix "auth/" \
-              --order-by LastEventTime --descending \
-              --region us-east-1 \
-              --query 'logStreams[0].logStreamName' \
-              --output text 2>/dev/null || echo "")
-            if [ -n "$LOG_STREAM" ] && [ "$LOG_STREAM" != "None" ]; then
-              echo "Stream: $LOG_STREAM"
-              aws logs get-log-events \
+
+            print_cw_logs() {
+              local prefix=$1
+              local label=$2
+              echo ""
+              echo "=== CloudWatch: $label ==="
+              STREAM=$(aws logs describe-log-streams \
                 --log-group-name "/ecs/ticketdesk" \
-                --log-stream-name "$LOG_STREAM" \
-                --limit 80 \
-                --query 'events[*].message' \
-                --output text \
-                --region us-east-1 2>/dev/null
-            fi
-            echo ""
-            echo "=== CloudWatch: api-gateway logs ==="
-            GW_STREAM=$(aws logs describe-log-streams \
-              --log-group-name "/ecs/ticketdesk" \
-              --log-stream-name-prefix "api-gateway/" \
-              --order-by LastEventTime --descending \
-              --region us-east-1 \
-              --query 'logStreams[0].logStreamName' \
-              --output text 2>/dev/null || echo "")
-            if [ -n "$GW_STREAM" ] && [ "$GW_STREAM" != "None" ]; then
-              echo "Stream: $GW_STREAM"
-              aws logs get-log-events \
-                --log-group-name "/ecs/ticketdesk" \
-                --log-stream-name "$GW_STREAM" \
-                --limit 50 \
-                --query 'events[*].message' \
-                --output text \
-                --region us-east-1 2>/dev/null
-            fi
+                --log-stream-name-prefix "$prefix/" \
+                --order-by LastEventTime --descending --region us-east-1 \
+                --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "")
+              if [ -n "$STREAM" ] && [ "$STREAM" != "None" ]; then
+                echo "  Stream: $STREAM"
+                aws logs get-log-events \
+                  --log-group-name "/ecs/ticketdesk" \
+                  --log-stream-name "$STREAM" \
+                  --limit 100 --query 'events[*].message' \
+                  --output text --region us-east-1 2>/dev/null
+              else
+                echo "  No log stream found for prefix: $prefix/"
+              fi
+            }
+            print_cw_logs "eureka"     "eureka-server"
+            print_cw_logs "auth"       "auth-service"
+            print_cw_logs "api-gateway" "api-gateway"
             exit 1
           fi
 

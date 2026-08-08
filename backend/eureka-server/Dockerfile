@@ -7,7 +7,11 @@ RUN apk add --no-cache maven && mvn clean package -DskipTests
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 COPY --from=builder /build/target/*.jar app.jar
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh \
+ && addgroup -S appgroup \
+ && adduser -S appuser -G appgroup \
+ && chown -R appuser:appgroup /app
 USER appuser
 EXPOSE 8761
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
