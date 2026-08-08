@@ -462,48 +462,81 @@ jobs:
       - name: Wait for ECS Services + Health Check
         if: env.AWS_KEY != ''
         run: |
-          echo "=== Waiting 100s for ECS services to start ==="
-          sleep 100
+          echo "=== Waiting 3 minutes for ECS services to start ==="
+          sleep 180
 
           ALB_DNS=$(aws elbv2 describe-load-balancers \
             --names ticketdesk-alb \
             --query 'LoadBalancers[0].DNSName' \
             --output text --region us-east-1 2>/dev/null || echo "")
+          echo "ALB: $ALB_DNS"
 
+          echo "=== Testing http://$ALB_DNS/api/v1/auth/login ==="
           SUCCESS=0
-          for i in $(seq 1 6); do
+          for i in $(seq 1 10); do
             RESP=$(curl -s -X POST "http://$ALB_DNS/api/v1/auth/login" \
               -H "Content-Type: application/json" \
               -d '{"email":"admin@ticketdesk.com","password":"admin123"}' \
-              --max-time 15 2>/dev/null || echo "TIMEOUT")
+              --max-time 20 2>/dev/null || echo "TIMEOUT")
             echo "  [$i] Response: $RESP"
             if echo "$RESP" | grep -q '"success":true'; then
               echo "  ✅✅✅ LOGIN SUCCESS — Application is FULLY WORKING! ✅✅✅"
               SUCCESS=1
               break
             fi
-            [ $i -lt 6 ] && echo "  Waiting 20s..." && sleep 20
+            [ $i -lt 10 ] && echo "  Waiting 30s..." && sleep 30
           done
 
           if [ $SUCCESS -eq 0 ]; then
-            echo "❌ LOGIN TEST FAILED!"
+            echo "❌ LOGIN TEST FAILED after all retries"
+            echo ""
+            echo "=== ECS Service Events ==="
+            for svc in ticketdesk-eureka-service ticketdesk-gateway-service ticketdesk-auth-service; do
+              echo "--- $svc ---"
+              aws ecs describe-services \
+                --cluster ticketdesk-cluster \
+                --services "$svc" \
+                --region us-east-1 \
+                --query 'services[0].events[0:5]' \
+                --output table 2>/dev/null || true
+            done
+            echo ""
+            echo "=== CloudWatch: auth-service logs ==="
             LOG_STREAM=$(aws logs describe-log-streams \
               --log-group-name "/ecs/ticketdesk" \
               --log-stream-name-prefix "auth/" \
-              --order-by LastEventTime \
-              --descending \
+              --order-by LastEventTime --descending \
               --region us-east-1 \
               --query 'logStreams[0].logStreamName' \
               --output text 2>/dev/null || echo "")
             if [ -n "$LOG_STREAM" ] && [ "$LOG_STREAM" != "None" ]; then
-              echo "=== CloudWatch logs ($LOG_STREAM) ==="
+              echo "Stream: $LOG_STREAM"
               aws logs get-log-events \
                 --log-group-name "/ecs/ticketdesk" \
                 --log-stream-name "$LOG_STREAM" \
+                --limit 80 \
+                --query 'events[*].message' \
+                --output text \
+                --region us-east-1 2>/dev/null
+            fi
+            echo ""
+            echo "=== CloudWatch: api-gateway logs ==="
+            GW_STREAM=$(aws logs describe-log-streams \
+              --log-group-name "/ecs/ticketdesk" \
+              --log-stream-name-prefix "api-gateway/" \
+              --order-by LastEventTime --descending \
+              --region us-east-1 \
+              --query 'logStreams[0].logStreamName' \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$GW_STREAM" ] && [ "$GW_STREAM" != "None" ]; then
+              echo "Stream: $GW_STREAM"
+              aws logs get-log-events \
+                --log-group-name "/ecs/ticketdesk" \
+                --log-stream-name "$GW_STREAM" \
                 --limit 50 \
                 --query 'events[*].message' \
                 --output text \
-                --region us-east-1 2>/dev/null | tail -50
+                --region us-east-1 2>/dev/null
             fi
             exit 1
           fi

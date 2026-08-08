@@ -64,11 +64,11 @@ locals {
   # Eureka URL via ALB
   eureka_url = "http://${aws_lb.main.dns_name}:8761/eureka/"
 
-  # RDS base host:port (endpoint includes port)
-  rds_host = aws_db_instance.mysql.endpoint
+  # RDS hostname only (address = hostname without port)
+  rds_host = aws_db_instance.mysql.address
 
-  # Unified DB URL pointing to ticketdesk_db (created automatically by RDS)
-  db_url = "jdbc:mysql://${local.rds_host}/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true"
+  # Unified DB URL — explicit port 3306 after hostname
+  db_url = "jdbc:mysql://${local.rds_host}:3306/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 
   # Common env vars passed to every service that needs Eureka
   eureka_env = [

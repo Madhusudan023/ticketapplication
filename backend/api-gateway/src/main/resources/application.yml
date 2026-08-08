@@ -5,25 +5,17 @@ spring:
   application:
     name: api-gateway
   cloud:
-    inetutils:
-      preferred-networks:
-        - "10\\.0\\..*"
     gateway:
       httpclient:
-        connect-timeout: 5000
-        response-timeout: 15s
+        connect-timeout: 10000
+        response-timeout: 30s
       globalcors:
         corsConfigurations:
           '[/**]':
-            allowedOrigins: "*"
-            allowedMethods:
-              - GET
-              - POST
-              - PUT
-              - PATCH
-              - DELETE
-              - OPTIONS
-            allowedHeaders: "*"
+            allowedOrigins: '*'
+            allowedMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+            allowedHeaders: '*'
+            exposedHeaders: '*'
       routes:
         - id: auth-service
           uri: lb://AUTH-SERVICE
@@ -53,11 +45,14 @@ spring:
 eureka:
   client:
     serviceUrl:
-      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:${EUREKA_URI:http://localhost:8761/eureka/}}
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
     fetchRegistry: true
     registerWithEureka: true
+    registryFetchIntervalSeconds: 10
   instance:
     preferIpAddress: true
+    leaseRenewalIntervalInSeconds: 15
+    leaseExpirationDurationInSeconds: 45
 
 management:
   endpoints:
