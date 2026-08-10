@@ -1,31 +1,19 @@
-import React, { useEffect, useState } from 'react';
-import { AppBar, Toolbar, Box, Typography, Chip, Avatar, Tooltip, IconButton, Button } from '@mui/material';
+import React, { useState } from 'react';
+import { AppBar, Toolbar, Box, Typography, Chip, IconButton, Menu, MenuItem } from '@mui/material';
 import ConfirmationNumberOutlinedIcon from '@mui/icons-material/ConfirmationNumberOutlined';
-import CloudDoneIcon from '@mui/icons-material/CloudDone';
-import CloudOffIcon from '@mui/icons-material/CloudOff';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import LogoutIcon from '@mui/icons-material/Logout';
-import { ApiService } from '../services/api';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useAuth } from '../context/AuthContext';
 
-export default function Navbar({ onRefresh }) {
+export default function Navbar() {
   const { user, logout } = useAuth();
-  const [status, setStatus] = useState('checking');
+  const [anchorEl, setAnchorEl] = useState(null);
 
-  const checkHealth = async () => {
-    try {
-      const res = await ApiService.checkHealth();
-      setStatus(res?.status === 'UP' ? 'online' : 'offline');
-    } catch {
-      setStatus('offline');
-    }
+  const handleMenuOpen = (event) => setAnchorEl(event.currentTarget);
+  const handleMenuClose = () => setAnchorEl(null);
+  const handleLogout = () => {
+    handleMenuClose();
+    logout();
   };
-
-  useEffect(() => {
-    checkHealth();
-    const interval = setInterval(checkHealth, 30000);
-    return () => clearInterval(interval);
-  }, []);
 
   const roleColors = {
     ADMIN: { bg: 'rgba(239,68,68,0.15)', color: '#f87171', border: 'rgba(239,68,68,0.3)' },
@@ -40,68 +28,40 @@ export default function Navbar({ onRefresh }) {
       position="sticky"
       elevation={0}
       sx={{
-        background: 'rgba(10, 14, 26, 0.85)',
-        backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid rgba(59,130,246,0.15)',
+        background: '#0a0a0a',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
       }}
     >
-      <Toolbar sx={{ justifyContent: 'space-between', py: 0.5 }}>
+      <Toolbar sx={{ justifyContent: 'space-between', minHeight: '32px !important', px: 3 }}>
         {/* Brand */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Box
             sx={{
               background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
-              borderRadius: 2.5,
-              p: 0.85,
+              borderRadius: 1.5,
+              p: 0.4,
               display: 'flex',
-              boxShadow: '0 4px 15px rgba(59,130,246,0.4)',
+              boxShadow: '0 2px 8px rgba(59,130,246,0.3)',
             }}
           >
-            <ConfirmationNumberOutlinedIcon sx={{ color: 'white', fontSize: '1.4rem' }} />
+            <ConfirmationNumberOutlinedIcon sx={{ color: 'white', fontSize: '1.2rem' }} />
           </Box>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 800, color: '#f8fafc', lineHeight: 1, letterSpacing: '-0.5px' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Typography variant="h6" sx={{ fontWeight: 800, color: '#f8fafc', lineHeight: 1, letterSpacing: '-0.5px', fontSize: '1.1rem' }}>
               Ticket<span style={{ color: '#3b82f6' }}>Desk</span>
             </Typography>
-            <Typography variant="caption" sx={{ color: '#64748b', letterSpacing: '1.5px', textTransform: 'uppercase', fontSize: '0.6rem' }}>
+            <Typography variant="caption" sx={{ color: '#64748b', letterSpacing: '1px', textTransform: 'uppercase', fontSize: '0.7rem' }}>
               Enterprise Edition
             </Typography>
           </Box>
         </Box>
 
-        {/* Status & User Actions */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Chip
-            icon={status === 'online' ? <CloudDoneIcon sx={{ fontSize: '0.9rem !important' }} /> : <CloudOffIcon sx={{ fontSize: '0.9rem !important' }} />}
-            label={status === 'checking' ? 'Connecting...' : status === 'online' ? 'API Connected' : 'API Offline'}
-            size="small"
-            sx={{
-              bgcolor: status === 'online' ? 'rgba(16,185,129,0.12)' : status === 'offline' ? 'rgba(239,68,68,0.12)' : 'rgba(100,116,139,0.12)',
-              color: status === 'online' ? '#10b981' : status === 'offline' ? '#ef4444' : '#94a3b8',
-              border: `1px solid ${status === 'online' ? 'rgba(16,185,129,0.3)' : status === 'offline' ? 'rgba(239,68,68,0.3)' : 'rgba(100,116,139,0.3)'}`,
-              fontWeight: 600,
-              fontSize: '0.72rem',
-            }}
-          />
-          <Tooltip title="Refresh data">
-            <IconButton onClick={onRefresh} size="small" sx={{ color: '#94a3b8', '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-
+        {/* User Actions */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
           {user && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: 1, borderLeft: '1px solid rgba(71,85,105,0.3)' }}>
-              <Avatar
-                sx={{
-                  width: 34, height: 34, fontSize: '0.8rem', fontWeight: 700,
-                  background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
-                  boxShadow: '0 2px 8px rgba(59,130,246,0.4)',
-                }}
-              >
-                {user.name ? user.name.substring(0, 2).toUpperCase() : 'U'}
-              </Avatar>
-              <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-                <Typography variant="body2" sx={{ fontWeight: 700, color: '#f1f5f9', lineHeight: 1.1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: 1.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 700, color: '#f1f5f9', lineHeight: 1, fontSize: '0.85rem' }}>
                   {user.name}
                 </Typography>
                 <Chip
@@ -109,15 +69,33 @@ export default function Navbar({ onRefresh }) {
                   size="small"
                   sx={{
                     bgcolor: rc.bg, color: rc.color, border: `1px solid ${rc.border}`,
-                    fontWeight: 700, fontSize: '0.62rem', height: 18, mt: 0.3,
+                    fontWeight: 700, fontSize: '0.65rem', height: 20,
                   }}
                 />
               </Box>
-              <Tooltip title="Logout">
-                <IconButton onClick={logout} size="small" sx={{ color: '#f87171', '&:hover': { bgcolor: 'rgba(239,68,68,0.12)' } }}>
-                  <LogoutIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+
+              <IconButton onClick={handleMenuOpen} size="small" sx={{ color: '#f8fafc', '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' } }}>
+                <PersonOutlineIcon sx={{ fontSize: '1.4rem' }} />
+              </IconButton>
+
+              <Menu
+                anchorEl={anchorEl}
+                open={Boolean(anchorEl)}
+                onClose={handleMenuClose}
+                PaperProps={{
+                  sx: {
+                    mt: 1,
+                    bgcolor: '#ffffff',
+                    color: '#0f172a',
+                    border: '1px solid #e2e8f0',
+                    minWidth: '120px'
+                  }
+                }}
+              >
+                <MenuItem onClick={handleLogout} sx={{ fontSize: '0.85rem', '&:hover': { bgcolor: '#f1f5f9' } }}>
+                  Logout
+                </MenuItem>
+              </Menu>
             </Box>
           )}
         </Box>

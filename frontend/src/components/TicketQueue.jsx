@@ -3,36 +3,39 @@ import {
   Card, CardContent, Typography, Box, TextField, MenuItem,
   Chip, Button, InputAdornment, Collapse, Divider, Skeleton,
   IconButton, Tooltip, LinearProgress, List, ListItem,
-  ListItemText, ListItemSecondaryAction, Select, FormControl, InputLabel
+  ListItemText, ListItemSecondaryAction
 } from '@mui/material';
-import SearchIcon          from '@mui/icons-material/Search';
+
+// Icons
+import SearchIcon from '@mui/icons-material/Search';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
-import ReplyIcon           from '@mui/icons-material/Reply';
-import ExpandMoreIcon      from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon      from '@mui/icons-material/ExpandLess';
-import CommentIcon         from '@mui/icons-material/Comment';
-import AttachFileIcon      from '@mui/icons-material/AttachFile';
-import DeleteOutlineIcon   from '@mui/icons-material/DeleteOutline';
-import FileDownloadIcon    from '@mui/icons-material/FileDownload';
-import CloudUploadIcon     from '@mui/icons-material/CloudUpload';
-import PersonIcon          from '@mui/icons-material/Person';
-import AssignmentIndIcon   from '@mui/icons-material/AssignmentInd';
-import { ApiService }      from '../services/api';
-import { useAuth }         from '../context/AuthContext';
+import ReplyIcon from '@mui/icons-material/Reply';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import CommentIcon from '@mui/icons-material/Comment';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import AssignmentIndIcon from '@mui/icons-material/AssignmentInd';
+import ConfirmationNumberOutlinedIcon from '@mui/icons-material/ConfirmationNumberOutlined';
+
+import { ApiService } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 // ── Status / Priority config ──────────────────────────────────────────────────
 const STATUS_CONFIG = {
-  OPEN:        { color: '#60a5fa',  bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.3)',  label: 'OPEN' },
-  IN_PROGRESS: { color: '#fbbf24',  bg: 'rgba(245,158,11,0.12)',  border: 'rgba(245,158,11,0.3)',  label: 'IN PROGRESS' },
-  RESOLVED:    { color: '#34d399',  bg: 'rgba(16,185,129,0.12)',  border: 'rgba(16,185,129,0.3)',  label: 'RESOLVED' },
-  CLOSED:      { color: '#94a3b8',  bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.3)', label: 'CLOSED' },
+  OPEN:        { color: '#3B82F6', bg: '#EFF6FF', border: '#BFDBFE', label: 'Open' },
+  IN_PROGRESS: { color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A', label: 'In Progress' },
+  RESOLVED:    { color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0', label: 'Resolved' },
+  CLOSED:      { color: '#64748B', bg: '#F8FAFC', border: '#E2E8F0', label: 'Closed' },
 };
 
 const PRIORITY_CONFIG = {
-  URGENT: { color: '#f87171', dot: '#ef4444' },
-  HIGH:   { color: '#fb923c', dot: '#f97316' },
-  MEDIUM: { color: '#60a5fa', dot: '#3b82f6' },
-  LOW:    { color: '#94a3b8', dot: '#64748b' },
+  URGENT: { color: '#EF4444', dot: '#EF4444' },
+  HIGH:   { color: '#F97316', dot: '#F97316' },
+  MEDIUM: { color: '#3B82F6', dot: '#3B82F6' },
+  LOW:    { color: '#94A3B8', dot: '#94A3B8' },
 };
 
 const TRANSITIONS = {
@@ -42,14 +45,21 @@ const TRANSITIONS = {
   CLOSED:      [],
 };
 
-const selectSx = {
+// Premium Input Styling
+const inputSx = {
   '& .MuiOutlinedInput-root': {
-    color: '#f1f5f9', bgcolor: 'rgba(15,23,42,0.6)', borderRadius: 2, fontSize: '0.875rem',
-    '& fieldset': { borderColor: 'rgba(71,85,105,0.5)' },
-    '&:hover fieldset': { borderColor: '#3b82f6' },
-    '&.Mui-focused fieldset': { borderColor: '#3b82f6' },
+    color: '#111827',
+    backgroundColor: '#FAFAFA',
+    borderRadius: '12px',
+    transition: 'all 0.2s ease-in-out',
+    fontSize: '0.875rem',
+    '& fieldset': { borderColor: '#E5E7EB', borderWidth: '1px' },
+    '&:hover fieldset': { borderColor: '#D1D5DB' },
+    '&.Mui-focused': { backgroundColor: '#FFFFFF' },
+    '&.Mui-focused fieldset': { borderColor: '#111827', borderWidth: '1px' },
   },
-  '& .MuiInputLabel-root': { color: '#64748b', fontSize: '0.875rem' },
+  '& .MuiInputLabel-root': { color: '#6B7280', fontSize: '0.875rem' },
+  '& .MuiInputLabel-root.Mui-focused': { color: '#111827', fontWeight: 500 },
 };
 
 const formatBytes = (bytes) => {
@@ -62,25 +72,25 @@ const formatBytes = (bytes) => {
 // ── TicketCard ────────────────────────────────────────────────────────────────
 function TicketCard({ ticket, agents, onRefresh, onToast }) {
   const { user, isAdmin, isAgent } = useAuth();
-  const [expanded,    setExpanded]    = useState(false);
-  const [activeTab,   setActiveTab]   = useState('comments'); // 'comments' | 'attachments'
-  const [comment,     setComment]     = useState('');
-  const [submitting,  setSubmitting]  = useState(false);
+  const [expanded,    setExpanded]   = useState(false);
+  const [activeTab,   setActiveTab]  = useState('comments'); 
+  const [comment,     setComment]    = useState('');
+  const [submitting,  setSubmitting] = useState(false);
   const [attachments, setAttachments] = useState([]);
-  const [attachLoad,  setAttachLoad]  = useState(false);
-  const [uploading,   setUploading]   = useState(false);
-  const [uploadPct,   setUploadPct]   = useState(0);
+  const [attachLoad,  setAttachLoad] = useState(false);
+  const [uploading,   setUploading]  = useState(false);
+  const [uploadPct,   setUploadPct]  = useState(0);
   const [assignedAgent, setAssignedAgent] = useState(ticket.assignedTo || '');
 
-  const sc          = STATUS_CONFIG[ticket.status]    || STATUS_CONFIG.OPEN;
-  const pc          = PRIORITY_CONFIG[ticket.priority] || PRIORITY_CONFIG.MEDIUM;
-  const transitions = TRANSITIONS[ticket.status]       || [];
+  const sc = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.OPEN;
+  const pc = PRIORITY_CONFIG[ticket.priority] || PRIORITY_CONFIG.MEDIUM;
+  const transitions = TRANSITIONS[ticket.status] || [];
 
   const handleExpand = useCallback(async () => {
     const next = !expanded;
     setExpanded(next);
     if (next && activeTab === 'attachments') await loadAttachments();
-  }, [expanded, activeTab]);
+  }, [expanded, activeTab, ticket.id]);
 
   const loadAttachments = useCallback(async () => {
     setAttachLoad(true);
@@ -194,45 +204,46 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
   return (
     <Box
       sx={{
-        bgcolor: 'rgba(10,14,26,0.7)',
-        border: '1px solid rgba(71,85,105,0.3)',
-        borderRadius: 3,
-        mb: 2,
+        bgcolor: '#FFFFFF',
+        border: '1px solid #F3F4F6',
+        borderRadius: '16px',
+        mb: 2.5,
         overflow: 'hidden',
         transition: 'all 0.25s ease',
-        '&:hover': { border: '1px solid rgba(59,130,246,0.35)', bgcolor: 'rgba(10,14,26,0.9)' },
+        '&:hover': { 
+          borderColor: '#E5E7EB',  
+        },
       }}
     >
-      {/* Priority stripe */}
-      <Box sx={{ height: 3, background: `linear-gradient(90deg, ${pc.dot}, transparent)` }} />
-
       <Box sx={{ p: 2.5 }}>
         {/* Top Row */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
           <Box sx={{ flex: 1, mr: 2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
-              <Typography variant="caption" sx={{ color: '#3b82f6', fontWeight: 700, fontFamily: 'monospace' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+              <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 600, fontFamily: 'monospace', letterSpacing: '0.05em' }}>
                 #{String(ticket.id).padStart(4, '0')}
               </Typography>
-              <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#334155' }} />
-              <Typography variant="caption" sx={{ color: '#64748b' }}>{ticket.category}</Typography>
-              <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#334155' }} />
-              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: pc.dot }} />
-              <Typography variant="caption" sx={{ color: pc.color, fontWeight: 600 }}>{ticket.priority}</Typography>
+              <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#D1D5DB' }} />
+              <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 500 }}>{ticket.category}</Typography>
+              <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#D1D5DB' }} />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: pc.dot }} />
+                <Typography variant="caption" sx={{ color: pc.color, fontWeight: 600 }}>{ticket.priority}</Typography>
+              </Box>
               
               {ticket.assignedTo && (
                 <>
-                  <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#334155' }} />
+                  <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#D1D5DB' }} />
                   <Chip
-                    icon={<AssignmentIndIcon sx={{ fontSize: '0.75rem !important', color: '#fbbf24' }} />}
-                    label={`Agent: ${ticket.assignedTo}`}
+                    icon={<AssignmentIndIcon sx={{ fontSize: '0.75rem !important', color: '#F59E0B' }} />}
+                    label={`Assigned: ${ticket.assignedTo}`}
                     size="small"
-                    sx={{ height: 20, bgcolor: 'rgba(245,158,11,0.1)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)', fontSize: '0.65rem', fontWeight: 600 }}
+                    sx={{ height: 22, bgcolor: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A', fontSize: '0.7rem', fontWeight: 600 }}
                   />
                 </>
               )}
             </Box>
-            <Typography variant="body1" sx={{ fontWeight: 600, color: '#f1f5f9', lineHeight: 1.3 }}>
+            <Typography variant="body1" sx={{ fontWeight: 700, color: '#111827', lineHeight: 1.3, fontSize: '1.1rem' }}>
               {ticket.title}
             </Typography>
           </Box>
@@ -241,17 +252,17 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
             <Chip
               label={sc.label}
               size="small"
-              sx={{ bgcolor: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700, fontSize: '0.68rem', letterSpacing: '0.5px' }}
+              sx={{ bgcolor: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700, fontSize: '0.7rem' }}
             />
             {isAdmin && (
               <Tooltip title="Delete ticket (Admin)">
-                <IconButton size="small" onClick={handleDeleteTicket} sx={{ color: '#64748b', '&:hover': { color: '#f87171' } }}>
+                <IconButton size="small" onClick={handleDeleteTicket} sx={{ color: '#9CA3AF', '&:hover': { color: '#EF4444', bgcolor: '#FEF2F2' } }}>
                   <DeleteOutlineIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
             <Tooltip title={expanded ? 'Collapse' : 'Expand details'}>
-              <IconButton size="small" onClick={handleExpand} sx={{ color: '#64748b', '&:hover': { color: '#60a5fa' } }}>
+              <IconButton size="small" onClick={handleExpand} sx={{ color: '#9CA3AF', '&:hover': { color: '#111827', bgcolor: '#F3F4F6' } }}>
                 {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
               </IconButton>
             </Tooltip>
@@ -259,32 +270,32 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
         </Box>
 
         {/* Description */}
-        <Typography variant="body2" sx={{ color: '#94a3b8', lineHeight: 1.6, mb: 1.5 }}>
+        <Typography variant="body2" sx={{ color: '#4B5563', lineHeight: 1.6, mb: 2 }}>
           {ticket.description}
         </Typography>
 
         {/* Admin Assign Agent Controls & Created Date */}
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5 }}>
-          <Typography variant="caption" sx={{ color: '#475569' }}>
-            Created by: {ticket.createdBy || 'User'} · {formatDate(ticket.createdAt)}
+          <Typography variant="caption" sx={{ color: '#9CA3AF' }}>
+            Created by: <span style={{ fontWeight: 500, color: '#6B7280' }}>{ticket.createdBy || 'User'}</span> · {formatDate(ticket.createdAt)}
           </Typography>
 
           {/* Admin Assign Agent Dropdown */}
           {isAdmin && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="caption" sx={{ color: '#fbbf24', fontWeight: 600 }}>Assign Agent:</Typography>
+              <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 600 }}>Assign to:</Typography>
               <TextField
                 select
                 size="small"
                 value={assignedAgent}
                 onChange={e => handleAssignAgent(e.target.value)}
-                sx={{ width: 180, ...selectSx, '& .MuiOutlinedInput-root': { height: 30, fontSize: '0.75rem' } }}
-                SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#1e293b', color: '#f1f5f9' } } } }}
+                sx={{ width: 180, ...inputSx, '& .MuiOutlinedInput-root': { height: 32, fontSize: '0.75rem' } }}
+                SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#ffffff', color: '#111827', borderRadius: '12px', mt: 0.5 } } } }}
               >
-                <MenuItem value="">Unassigned</MenuItem>
+                <MenuItem value="" sx={{ fontSize: '0.85rem' }}>Unassigned</MenuItem>
                 {agents.map(ag => (
-                  <MenuItem key={ag.id} value={ag.email}>
-                    {ag.name} ({ag.email})
+                  <MenuItem key={ag.id} value={ag.email} sx={{ fontSize: '0.85rem' }}>
+                    {ag.name}
                   </MenuItem>
                 ))}
               </TextField>
@@ -294,7 +305,7 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
 
         {/* Status Transitions — AGENT and ADMIN only */}
         {(isAdmin || isAgent) && transitions.length > 0 && (
-          <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
             {transitions.map(t => {
               const tc = STATUS_CONFIG[t];
               return (
@@ -304,12 +315,12 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                   variant="outlined"
                   onClick={() => handleStatusChange(t)}
                   sx={{
-                    fontSize: '0.72rem', fontWeight: 600, borderRadius: 2, textTransform: 'none', py: 0.3,
+                    fontSize: '0.75rem', fontWeight: 600, borderRadius: '8px', textTransform: 'none', py: 0.4, px: 1.5,
                     borderColor: tc?.border, color: tc?.color,
                     '&:hover': { bgcolor: tc?.bg, borderColor: tc?.color },
                   }}
                 >
-                  Move → {tc?.label}
+                  Move to {tc?.label}
                 </Button>
               );
             })}
@@ -318,13 +329,13 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
 
         {/* Expandable Panel */}
         <Collapse in={expanded}>
-          <Divider sx={{ borderColor: 'rgba(71,85,105,0.25)', mt: 2, mb: 2 }} />
+          <Divider sx={{ borderColor: '#F3F4F6', mt: 2.5, mb: 2.5 }} />
 
           {/* Tab Switcher */}
-          <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+          <Box sx={{ display: 'flex', gap: 1.5, mb: 3 }}>
             {[
-              { key: 'comments',    icon: <CommentIcon sx={{ fontSize: '0.9rem' }} />,    label: `Comments (${ticket.comments?.length || 0})` },
-              { key: 'attachments', icon: <AttachFileIcon sx={{ fontSize: '0.9rem' }} />, label: `Attachments (${attachments.length})` },
+              { key: 'comments',    icon: <CommentIcon sx={{ fontSize: '1rem' }} />,    label: `Comments (${ticket.comments?.length || 0})` },
+              { key: 'attachments', icon: <AttachFileIcon sx={{ fontSize: '1rem' }} />, label: `Attachments (${attachments.length})` },
             ].map(tab => (
               <Button
                 key={tab.key}
@@ -332,12 +343,12 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                 startIcon={tab.icon}
                 onClick={() => handleTabChange(tab.key)}
                 sx={{
-                  textTransform: 'none', fontSize: '0.78rem',
-                  fontWeight: activeTab === tab.key ? 700 : 400,
-                  borderRadius: 2, px: 1.5,
-                  color: activeTab === tab.key ? '#60a5fa' : '#64748b',
-                  bgcolor: activeTab === tab.key ? 'rgba(59,130,246,0.1)' : 'transparent',
-                  border: activeTab === tab.key ? '1px solid rgba(59,130,246,0.3)' : '1px solid transparent',
+                  textTransform: 'none', fontSize: '0.85rem',
+                  fontWeight: activeTab === tab.key ? 600 : 500,
+                  borderRadius: '8px', px: 2, py: 0.5,
+                  color: activeTab === tab.key ? '#111827' : '#6B7280',
+                  bgcolor: activeTab === tab.key ? '#F3F4F6' : 'transparent',
+                  '&:hover': { bgcolor: '#F3F4F6' },
                 }}
               >
                 {tab.label}
@@ -347,65 +358,59 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
 
           {/* ── COMMENTS TAB ─────────────────────────────────────────────── */}
           {activeTab === 'comments' && (
-            <>
+            <Box>
               {ticket.comments?.length > 0 ? (
                 ticket.comments.map((c, idx) => (
                   <Box
                     key={idx}
                     sx={{
-                      bgcolor: 'rgba(30,41,59,0.5)',
-                      borderLeft: '3px solid #3b82f6',
-                      borderRadius: '0 8px 8px 0',
-                      p: 1.5, mb: 1,
+                      bgcolor: '#F9FAFB',
+                      borderLeft: '3px solid #D1D5DB',
+                      borderRadius: '0 12px 12px 0',
+                      p: 2, mb: 1.5,
                     }}
                   >
-                    <Typography variant="caption" sx={{ color: '#60a5fa', fontWeight: 700 }}>{c.author}</Typography>
-                    <Typography variant="body2" sx={{ color: '#cbd5e1', mt: 0.25, lineHeight: 1.5 }}>{c.content}</Typography>
+                    <Typography variant="caption" sx={{ color: '#111827', fontWeight: 700 }}>{c.author}</Typography>
+                    <Typography variant="body2" sx={{ color: '#4B5563', mt: 0.5, lineHeight: 1.5 }}>{c.content}</Typography>
                   </Box>
                 ))
               ) : (
-                <Typography variant="caption" sx={{ color: '#475569' }}>
-                  No comments yet. Be the first to comment.
+                <Typography variant="body2" sx={{ color: '#9CA3AF', mb: 2 }}>
+                  No comments yet. Be the first to start the conversation.
                 </Typography>
               )}
 
-              <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+              <Box sx={{ display: 'flex', gap: 1.5, mt: 2 }}>
                 <TextField
                   fullWidth size="small" placeholder="Write a comment..."
                   value={comment}
                   onChange={e => setComment(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleComment()}
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      color: '#f1f5f9', bgcolor: 'rgba(15,23,42,0.8)', borderRadius: 2, fontSize: '0.85rem',
-                      '& fieldset': { borderColor: 'rgba(71,85,105,0.4)' },
-                      '&:hover fieldset': { borderColor: '#3b82f6' },
-                      '&.Mui-focused fieldset': { borderColor: '#3b82f6' },
-                    },
-                  }}
+                  sx={inputSx}
                 />
                 <Button
-                  variant="contained" size="small"
+                  variant="contained" 
                   disabled={submitting || !comment.trim()}
                   onClick={handleComment}
-                  endIcon={<ReplyIcon fontSize="small" />}
                   sx={{
-                    borderRadius: 2, textTransform: 'none', fontWeight: 600, px: 2,
-                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                    '&:disabled': { opacity: 0.5 },
+                    borderRadius: '12px', textTransform: 'none', fontWeight: 600, px: 3,
+                    backgroundColor: '#111827',
+                    color: '#FFFFFF',
+                    '&:hover': { backgroundColor: '#374151' },
+                    '&:disabled': { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
                   }}
                 >
                   Reply
                 </Button>
               </Box>
-            </>
+            </Box>
           )}
 
           {/* ── ATTACHMENTS TAB ──────────────────────────────────────────── */}
           {activeTab === 'attachments' && (
-            <>
+            <Box>
               {/* Upload Button */}
-              <Box sx={{ mb: 2 }}>
+              <Box sx={{ mb: 2.5 }}>
                 <Button
                   component="label"
                   variant="outlined"
@@ -413,61 +418,61 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                   startIcon={<CloudUploadIcon />}
                   disabled={uploading}
                   sx={{
-                    borderRadius: 2, textTransform: 'none', fontWeight: 600, fontSize: '0.8rem',
-                    borderColor: 'rgba(59,130,246,0.4)', color: '#60a5fa',
-                    '&:hover': { bgcolor: 'rgba(59,130,246,0.08)', borderColor: '#3b82f6' },
+                    borderRadius: '10px', textTransform: 'none', fontWeight: 600, fontSize: '0.85rem',
+                    borderColor: '#E5E7EB', color: '#111827', px: 2, py: 0.8,
+                    '&:hover': { bgcolor: '#F9FAFB', borderColor: '#D1D5DB' },
                   }}
                 >
                   {uploading ? 'Uploading...' : 'Upload File'}
                   <input type="file" hidden onChange={handleFileUpload} />
                 </Button>
-                <Typography variant="caption" sx={{ ml: 1.5, color: '#475569' }}>
+                <Typography variant="caption" sx={{ ml: 2, color: '#9CA3AF' }}>
                   Max 10 MB per file
                 </Typography>
               </Box>
 
               {/* Upload Progress */}
               {uploading && (
-                <Box sx={{ mb: 1.5 }}>
+                <Box sx={{ mb: 2 }}>
                   <LinearProgress
                     variant="determinate"
                     value={uploadPct}
                     sx={{
-                      borderRadius: 2, height: 4,
-                      bgcolor: 'rgba(59,130,246,0.15)',
-                      '& .MuiLinearProgress-bar': { bgcolor: '#3b82f6' },
+                      borderRadius: 2, height: 6,
+                      bgcolor: '#F3F4F6',
+                      '& .MuiLinearProgress-bar': { bgcolor: '#111827' },
                     }}
                   />
-                  <Typography variant="caption" sx={{ color: '#64748b', mt: 0.5, display: 'block' }}>
-                    {uploadPct}%
+                  <Typography variant="caption" sx={{ color: '#6B7280', mt: 0.5, display: 'block' }}>
+                    {uploadPct}% Uploaded
                   </Typography>
                 </Box>
               )}
 
               {/* Attachment List */}
               {attachLoad ? (
-                <Skeleton variant="rounded" height={60} sx={{ bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 2 }} />
+                <Skeleton variant="rounded" height={60} sx={{ bgcolor: '#F9FAFB', borderRadius: 2 }} />
               ) : attachments.length > 0 ? (
                 <List dense disablePadding>
                   {attachments.map(a => (
                     <ListItem
                       key={a.id}
                       sx={{
-                        bgcolor: 'rgba(30,41,59,0.4)',
-                        borderRadius: 2, mb: 0.75,
-                        border: '1px solid rgba(71,85,105,0.2)',
-                        '&:hover': { bgcolor: 'rgba(30,41,59,0.7)' },
+                        bgcolor: '#FFFFFF',
+                        borderRadius: '12px', mb: 1,
+                        border: '1px solid #F3F4F6',
+                        '&:hover': { borderColor: '#E5E7EB', bgcolor: '#F9FAFB' },
                       }}
                     >
-                      <AttachFileIcon sx={{ color: '#3b82f6', fontSize: '1rem', mr: 1 }} />
+                      <AttachFileIcon sx={{ color: '#6B7280', fontSize: '1.1rem', mr: 1.5 }} />
                       <ListItemText
                         primary={
-                          <Typography variant="body2" sx={{ color: '#f1f5f9', fontWeight: 500, fontSize: '0.82rem' }}>
+                          <Typography variant="body2" sx={{ color: '#111827', fontWeight: 600, fontSize: '0.85rem' }}>
                             {a.originalFileName}
                           </Typography>
                         }
                         secondary={
-                          <Typography variant="caption" sx={{ color: '#475569' }}>
+                          <Typography variant="caption" sx={{ color: '#6B7280' }}>
                             {formatBytes(a.fileSize)} · {a.contentType}
                           </Typography>
                         }
@@ -479,7 +484,7 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                             href={ApiService.downloadAttachment(a.id)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            sx={{ color: '#60a5fa', '&:hover': { color: '#93c5fd' } }}
+                            sx={{ color: '#6B7280', '&:hover': { color: '#111827', bgcolor: '#F3F4F6' }, mr: 0.5 }}
                           >
                             <FileDownloadIcon fontSize="small" />
                           </IconButton>
@@ -488,7 +493,7 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                           <IconButton
                             size="small"
                             onClick={() => handleDeleteAttachment(a.id, a.originalFileName)}
-                            sx={{ color: '#64748b', '&:hover': { color: '#f87171' } }}
+                            sx={{ color: '#9CA3AF', '&:hover': { color: '#EF4444', bgcolor: '#FEF2F2' } }}
                           >
                             <DeleteOutlineIcon fontSize="small" />
                           </IconButton>
@@ -498,11 +503,11 @@ function TicketCard({ ticket, agents, onRefresh, onToast }) {
                   ))}
                 </List>
               ) : (
-                <Typography variant="caption" sx={{ color: '#475569' }}>
-                  No attachments yet. Upload a file to get started.
+                <Typography variant="body2" sx={{ color: '#9CA3AF' }}>
+                  No attachments yet. Upload a file to provide more context.
                 </Typography>
               )}
-            </>
+            </Box>
           )}
         </Collapse>
       </Box>
@@ -530,10 +535,6 @@ export default function TicketQueue({ tickets, loading, onRefresh, onToast }) {
     }
   }, [isAdmin]);
 
-  // Role filtering:
-  // Admin -> Sees ALL tickets
-  // Agent -> Sees ONLY tickets assigned to them
-  // User  -> Sees ONLY tickets created by them
   const filtered = tickets.filter(t => {
     const q = search.toLowerCase();
     const matchesSearch = t.title.toLowerCase().includes(q) || t.description.toLowerCase().includes(q);
@@ -552,79 +553,99 @@ export default function TicketQueue({ tickets, loading, onRefresh, onToast }) {
 
   return (
     <Card
+      elevation={0}
       sx={{
-        background: 'linear-gradient(180deg, rgba(19,27,46,0.95) 0%, rgba(15,23,42,0.95) 100%)',
-        border: '1px solid rgba(59,130,246,0.15)',
-        borderRadius: 4,
-        boxShadow: '0 25px 50px rgba(0,0,0,0.4)',
+        background: '#FFFFFF',
+        border: '1px solid #F3F4F6',
+        borderRadius: '24px'
       }}
     >
-      <CardContent sx={{ p: 3 }}>
+      <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
         {/* Header */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-          <Box sx={{ bgcolor: 'rgba(52,211,153,0.12)', p: 1, borderRadius: 2, display: 'flex' }}>
-            <FormatListBulletedIcon sx={{ color: '#34d399', fontSize: '1.3rem' }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4 }}>
+          <Box 
+            sx={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center',
+              width: 48, 
+              height: 48, 
+              bgcolor: '#F9FAFB', 
+              borderRadius: '14px',
+              border: '1px solid #F3F4F6',
+              color: '#111827'
+            }}
+          >
+            <ConfirmationNumberOutlinedIcon />
           </Box>
           <Box>
-            <Typography variant="h6" sx={{ fontWeight: 700, color: '#f1f5f9', lineHeight: 1 }}>
+            <Typography variant="h5" sx={{ fontWeight: 800, color: '#111827', letterSpacing: '-0.02em', mb: 0.5 }}>
               {isAgent ? 'Assigned Ticket Queue' : isUser ? 'My Created Tickets' : 'Live Ticket Queue'}
             </Typography>
-            <Typography variant="caption" sx={{ color: '#64748b' }}>
+            <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.9rem' }}>
               {filtered.length} ticket{filtered.length !== 1 ? 's' : ''} showing
             </Typography>
           </Box>
           {filterStatus && (
             <Chip
-              label={filterStatus} size="small" onDelete={() => setFilter('')}
-              sx={{ ml: 'auto', ...STATUS_CONFIG[filterStatus] && { bgcolor: STATUS_CONFIG[filterStatus].bg, color: STATUS_CONFIG[filterStatus].color } }}
+              label={STATUS_CONFIG[filterStatus]?.label || filterStatus} 
+              size="small" 
+              onDelete={() => setFilter('')}
+              sx={{ 
+                ml: 'auto', 
+                bgcolor: STATUS_CONFIG[filterStatus]?.bg, 
+                color: STATUS_CONFIG[filterStatus]?.color,
+                fontWeight: 600,
+                borderRadius: '8px'
+              }}
             />
           )}
         </Box>
 
         {/* Filter Toolbar */}
-        <Box sx={{ display: 'flex', gap: 1.5, mb: 3, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap' }}>
           <TextField
             size="small" placeholder="Search tickets..."
             value={search} onChange={e => setSearch(e.target.value)}
-            sx={{ flex: 1, minWidth: 160, ...selectSx }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#475569', fontSize: '1.1rem' }} /></InputAdornment> }}
+            sx={{ flex: 1, minWidth: 200, ...inputSx }}
+            InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#9CA3AF', fontSize: '1.2rem' }} /></InputAdornment> }}
           />
           <TextField
             select size="small" value={filterStatus} onChange={e => setFilter(e.target.value)}
-            sx={{ width: 150, ...selectSx }}
-            SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#1e293b', color: '#f1f5f9' } } } }}
+            sx={{ width: 160, ...inputSx }}
+            SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#ffffff', color: '#111827', borderRadius: '12px', mt: 0.5 } } } }}
             label="Status"
           >
-            <MenuItem value="">All Status</MenuItem>
-            {Object.keys(STATUS_CONFIG).map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+            <MenuItem value="" sx={{ fontSize: '0.9rem' }}>All Status</MenuItem>
+            {Object.keys(STATUS_CONFIG).map(s => <MenuItem key={s} value={s} sx={{ fontSize: '0.9rem' }}>{STATUS_CONFIG[s].label}</MenuItem>)}
           </TextField>
           <TextField
             select size="small" value={filterPriority} onChange={e => setFilterP(e.target.value)}
-            sx={{ width: 150, ...selectSx }}
-            SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#1e293b', color: '#f1f5f9' } } } }}
+            sx={{ width: 160, ...inputSx }}
+            SelectProps={{ MenuProps: { PaperProps: { sx: { bgcolor: '#ffffff', color: '#111827', borderRadius: '12px', mt: 0.5 } } } }}
             label="Priority"
           >
-            <MenuItem value="">All Priority</MenuItem>
-            {Object.keys(PRIORITY_CONFIG).map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+            <MenuItem value="" sx={{ fontSize: '0.9rem' }}>All Priority</MenuItem>
+            {Object.keys(PRIORITY_CONFIG).map(p => <MenuItem key={p} value={p} sx={{ fontSize: '0.9rem' }}>{p}</MenuItem>)}
           </TextField>
         </Box>
 
-        <Divider sx={{ borderColor: 'rgba(71,85,105,0.25)', mb: 3 }} />
+        <Divider sx={{ borderColor: '#F3F4F6', mb: 4 }} />
 
         {/* Ticket List */}
         {loading ? (
           [...Array(3)].map((_, i) => (
-            <Skeleton key={i} variant="rounded" height={120} sx={{ bgcolor: 'rgba(255,255,255,0.04)', mb: 2, borderRadius: 3 }} />
+            <Skeleton key={i} variant="rounded" height={140} sx={{ bgcolor: '#F9FAFB', mb: 2.5, borderRadius: '16px' }} />
           ))
         ) : filtered.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 6 }}>
-            <Typography variant="h6" sx={{ color: '#64748b', mb: 1 }}>No tickets found</Typography>
-            <Typography variant="body2" sx={{ color: '#475569' }}>
+          <Box sx={{ textAlign: 'center', py: 8, bgcolor: '#F9FAFB', borderRadius: '16px', border: '1px dashed #E5E7EB' }}>
+            <Typography variant="h6" sx={{ color: '#4B5563', mb: 1, fontWeight: 600 }}>No tickets found</Typography>
+            <Typography variant="body2" sx={{ color: '#9CA3AF' }}>
               {isAgent
-                ? 'No tickets currently assigned to you'
+                ? 'No tickets currently assigned to you.'
                 : isUser
-                ? 'You have not created any IT support tickets yet'
-                : 'Try adjusting your search filters'}
+                ? 'You have not created any IT support tickets yet.'
+                : 'Try adjusting your search filters to find what you are looking for.'}
             </Typography>
           </Box>
         ) : (

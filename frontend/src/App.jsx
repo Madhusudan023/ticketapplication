@@ -18,13 +18,14 @@ import LoginPage        from './pages/LoginPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ApiService }            from './services/api';
 
-// ── Dark Theme ────────────────────────────────────────────────────────────────
-const darkTheme = createTheme({
+// ── Light Theme ────────────────────────────────────────────────────────────────
+const lightTheme = createTheme({
   palette: {
-    mode: 'dark',
-    background: { default: '#060a14', paper: '#0f172a' },
+    mode: 'light',
+    background: { default: '#f4f7f6', paper: '#ffffff' },
     primary:    { main: '#3b82f6' },
     secondary:  { main: '#8b5cf6' },
+    text:       { primary: '#0f172a', secondary: '#475569' },
   },
   typography: {
     fontFamily: '"Inter", "Roboto", "Helvetica Neue", sans-serif',
@@ -32,22 +33,20 @@ const darkTheme = createTheme({
   },
   components: {
     MuiCard:    { styleOverrides: { root: { backgroundImage: 'none' } } },
-    MuiDivider: { styleOverrides: { root: { borderColor: 'rgba(71,85,105,0.3)' } } },
+    MuiDivider: { styleOverrides: { root: { borderColor: 'rgba(15,23,42,0.1)' } } },
   },
 });
 
 const globalStyles = {
   body: {
-    background:
-      'radial-gradient(ellipse at 20% 20%, rgba(59,130,246,0.06) 0%, transparent 50%), ' +
-      'radial-gradient(ellipse at 80% 80%, rgba(139,92,246,0.06) 0%, transparent 50%), ' +
-      '#060a14',
+    background: '#f4f7f6',
     minHeight: '100vh',
+    color: '#0f172a',
   },
   '*::-webkit-scrollbar':       { width: '6px' },
-  '*::-webkit-scrollbar-track': { background: 'rgba(15,23,42,0.5)' },
-  '*::-webkit-scrollbar-thumb': { background: 'rgba(59,130,246,0.4)', borderRadius: '3px' },
-  '*::-webkit-scrollbar-thumb:hover': { background: 'rgba(59,130,246,0.7)' },
+  '*::-webkit-scrollbar-track': { background: 'rgba(0,0,0,0.05)' },
+  '*::-webkit-scrollbar-thumb': { background: 'rgba(59,130,246,0.3)', borderRadius: '3px' },
+  '*::-webkit-scrollbar-thumb:hover': { background: 'rgba(59,130,246,0.5)' },
 };
 
 // ── Main App Content (shown when logged in) ───────────────────────────────────
@@ -112,27 +111,31 @@ function MainContent() {
     <>
       <Navbar onRefresh={loadData} />
 
-      <Container maxWidth="xl" sx={{ pt: 3, pb: 8 }}>
+      {/* White Secondary Nav Bar */}
+      <Box sx={{ bgcolor: '#ffffff', width: '100%', borderBottom: '1px solid #e2e8f0', mb: 3, boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+        <Container maxWidth="xl">
+          <Tabs
+            value={activeTab}
+            onChange={(_, v) => setActiveTab(v)}
+            sx={{
+              minHeight: 64,
+              '& .MuiTab-root': {
+                color: '#475569', fontWeight: 600, textTransform: 'none', fontSize: '1.05rem',
+                minHeight: 64, mr: 3, px: 1,
+                '&:hover': { color: '#0f172a', bgcolor: 'rgba(15,23,42,0.04)' },
+              },
+              '& .Mui-selected':      { color: '#000000 !important' },
+              '& .MuiTabs-indicator': { bgcolor: '#ef4444', height: '4px', borderRadius: '4px 4px 0 0' },
+            }}
+          >
+            {tabs.map((t, i) => (
+              <Tab key={i} label={t.label} id={`main-tab-${i}`} disableRipple />
+            ))}
+          </Tabs>
+        </Container>
+      </Box>
 
-        {/* Tab Navigation */}
-        <Tabs
-          value={activeTab}
-          onChange={(_, v) => setActiveTab(v)}
-          sx={{
-            mb: 3,
-            '& .MuiTab-root': {
-              color: '#475569', fontWeight: 600, textTransform: 'none', fontSize: '0.875rem',
-              minHeight: 42, borderRadius: 2, mr: 0.5,
-              '&:hover': { color: '#94a3b8', bgcolor: 'rgba(71,85,105,0.08)' },
-            },
-            '& .Mui-selected':      { color: '#f8fafc !important' },
-            '& .MuiTabs-indicator': { bgcolor: '#3b82f6', height: '2px', borderRadius: '2px' },
-          }}
-        >
-          {tabs.map((t, i) => (
-            <Tab key={i} icon={t.icon} iconPosition="start" label={t.label} id={`main-tab-${i}`} disableRipple />
-          ))}
-        </Tabs>
+      <Container maxWidth="xl" sx={{ pb: 8 }}>
 
         {/* ── ADMIN TABS ────────────────────────────────────────────────────── */}
         {isAdmin && (
@@ -207,7 +210,7 @@ function AppRouter() {
 
 export default function App() {
   return (
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={lightTheme}>
       <CssBaseline />
       <GlobalStyles styles={globalStyles} />
       <AuthProvider>

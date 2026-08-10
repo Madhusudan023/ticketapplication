@@ -4,36 +4,50 @@ import {
   Divider, Chip, Avatar, IconButton, Tooltip, CircularProgress,
   Alert, Skeleton, Tab, Tabs, InputAdornment,
 } from '@mui/material';
+import { useFormik } from 'formik';
+import * as Yup from 'yup';
+
+// Google Material Icons
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import PersonAddAlt1Icon      from '@mui/icons-material/PersonAddAlt1';
-import DeleteOutlineIcon      from '@mui/icons-material/DeleteOutline';
-import GroupIcon              from '@mui/icons-material/Group';
-import EngineeringIcon        from '@mui/icons-material/Engineering';
-import PersonOutlineIcon      from '@mui/icons-material/PersonOutline';
-import EmailOutlinedIcon      from '@mui/icons-material/EmailOutlined';
-import VisibilityIcon         from '@mui/icons-material/Visibility';
-import VisibilityOffIcon      from '@mui/icons-material/VisibilityOff';
-import { useFormik }  from 'formik';
-import * as Yup       from 'yup';
+import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import GroupIcon from '@mui/icons-material/Group';
+import EngineeringIcon from '@mui/icons-material/Engineering';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
+import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import SecurityIcon from '@mui/icons-material/Security';
+import SupportAgentIcon from '@mui/icons-material/SupportAgent';
+import PersonIcon from '@mui/icons-material/Person';
+import AddIcon from '@mui/icons-material/Add';
+import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
+
 import { ApiService } from '../services/api';
 
-const fieldSx = {
-  mb: 2,
+// Premium Input Styling
+const inputSx = {
+  mb: 2.5,
   '& .MuiOutlinedInput-root': {
-    color: '#f1f5f9', bgcolor: 'rgba(15,23,42,0.7)', borderRadius: 2,
-    '& fieldset':             { borderColor: 'rgba(71,85,105,0.4)' },
-    '&:hover fieldset':       { borderColor: '#fbbf24' },
-    '&.Mui-focused fieldset': { borderColor: '#fbbf24', borderWidth: '1.5px' },
+    color: '#111827',
+    backgroundColor: '#FAFAFA',
+    borderRadius: '12px',
+    transition: 'all 0.2s ease-in-out',
+    fontSize: '0.9rem',
+    '& fieldset': { borderColor: '#E5E7EB', borderWidth: '1px' },
+    '&:hover fieldset': { borderColor: '#D1D5DB' },
+    '&.Mui-focused': { backgroundColor: '#FFFFFF' },
+    '&.Mui-focused fieldset': { borderColor: '#111827', borderWidth: '1px' },
   },
-  '& .MuiInputLabel-root':             { color: '#64748b' },
-  '& .MuiInputLabel-root.Mui-focused': { color: '#fbbf24' },
-  '& .MuiFormHelperText-root':         { color: '#f87171', fontSize: '0.72rem' },
+  '& .MuiInputLabel-root': { color: '#6B7280', fontSize: '0.9rem' },
+  '& .MuiInputLabel-root.Mui-focused': { color: '#111827', fontWeight: 500 },
+  '& .MuiFormHelperText-root': { color: '#EF4444', marginLeft: '4px' },
 };
 
 const ROLE_CONFIG = {
-  ADMIN: { color: '#f87171', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.3)', icon: '👑' },
-  AGENT: { color: '#fbbf24', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', icon: '🛠️' },
-  USER:  { color: '#34d399', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.3)', icon: '👤' },
+  ADMIN: { color: '#EF4444', bg: '#FEF2F2', border: '#FCA5A5', icon: <SecurityIcon fontSize="small" sx={{ color: '#EF4444' }} /> },
+  AGENT: { color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A', icon: <SupportAgentIcon fontSize="small" sx={{ color: '#F59E0B' }} /> },
+  USER:  { color: '#10B981', bg: '#ECFDF5', border: '#A7F3D0', icon: <PersonIcon fontSize="small" sx={{ color: '#10B981' }} /> },
 };
 
 // ── Create Agent Form ─────────────────────────────────────────────────────────
@@ -72,38 +86,40 @@ function CreateAgentForm({ onSuccess, onToast }) {
 
   return (
     <Box component="form" onSubmit={formik.handleSubmit} noValidate>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3, p: 2, bgcolor: 'rgba(245,158,11,0.06)', borderRadius: 3, border: '1px solid rgba(245,158,11,0.2)' }}>
-        <EngineeringIcon sx={{ color: '#fbbf24', fontSize: '1.4rem' }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4, p: 2.5, bgcolor: '#F9FAFB', borderRadius: '16px', border: '1px solid #F3F4F6' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, bgcolor: '#FFFFFF', borderRadius: '12px' }}>
+          <EngineeringIcon sx={{ color: '#111827', fontSize: '1.4rem' }} />
+        </Box>
         <Box>
-          <Typography variant="body2" sx={{ fontWeight: 700, color: '#fbbf24' }}>Create Agent Account</Typography>
-          <Typography variant="caption" sx={{ color: '#64748b' }}>Agent can manage & resolve tickets assigned to them</Typography>
+          <Typography variant="body1" sx={{ fontWeight: 700, color: '#111827', mb: 0.25 }}>Agent Provisioning</Typography>
+          <Typography variant="caption" sx={{ color: '#6B7280', fontSize: '0.8rem' }}>Create a new agent to handle and resolve IT support tickets.</Typography>
         </Box>
       </Box>
 
       <TextField
-        fullWidth size="small" id="agent-name" name="name" label="Full Name" sx={fieldSx}
+        fullWidth size="small" id="agent-name" name="name" label="Full Name" sx={inputSx}
         value={formik.values.name} onChange={formik.handleChange} onBlur={formik.handleBlur}
         error={formik.touched.name && Boolean(formik.errors.name)}
         helperText={formik.touched.name && formik.errors.name}
-        InputProps={{ startAdornment: <InputAdornment position="start"><PersonOutlineIcon sx={{ color: '#475569', fontSize: '1rem' }} /></InputAdornment> }}
+        InputProps={{ startAdornment: <InputAdornment position="start"><PersonOutlineIcon sx={{ color: '#9CA3AF', fontSize: '1.1rem' }} /></InputAdornment> }}
       />
       <TextField
-        fullWidth size="small" id="agent-email" name="email" label="Email Address" sx={fieldSx}
+        fullWidth size="small" id="agent-email" name="email" label="Email Address" sx={inputSx}
         value={formik.values.email} onChange={formik.handleChange} onBlur={formik.handleBlur}
         error={formik.touched.email && Boolean(formik.errors.email)}
         helperText={formik.touched.email && formik.errors.email}
-        InputProps={{ startAdornment: <InputAdornment position="start"><EmailOutlinedIcon sx={{ color: '#475569', fontSize: '1rem' }} /></InputAdornment> }}
+        InputProps={{ startAdornment: <InputAdornment position="start"><EmailOutlinedIcon sx={{ color: '#9CA3AF', fontSize: '1.1rem' }} /></InputAdornment> }}
       />
       <TextField
-        fullWidth size="small" id="agent-password" name="password" label="Password"
-        type={showPw ? 'text' : 'password'} sx={fieldSx}
+        fullWidth size="small" id="agent-password" name="password" label="Temporary Password"
+        type={showPw ? 'text' : 'password'} sx={inputSx}
         value={formik.values.password} onChange={formik.handleChange} onBlur={formik.handleBlur}
         error={formik.touched.password && Boolean(formik.errors.password)}
         helperText={formik.touched.password && formik.errors.password}
         InputProps={{
           endAdornment: (
             <InputAdornment position="end">
-              <IconButton size="small" onClick={() => setShowPw(s => !s)} sx={{ color: '#64748b' }}>
+              <IconButton size="small" onClick={() => setShowPw(s => !s)} sx={{ color: '#9CA3AF', '&:hover': { color: '#111827' } }}>
                 {showPw ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
               </IconButton>
             </InputAdornment>
@@ -114,15 +130,25 @@ function CreateAgentForm({ onSuccess, onToast }) {
       <Button
         type="submit" variant="contained" fullWidth
         disabled={formik.isSubmitting}
-        endIcon={formik.isSubmitting ? <CircularProgress size={16} color="inherit" /> : <PersonAddAlt1Icon />}
         sx={{
-          py: 1.3, borderRadius: 2.5, fontWeight: 700, textTransform: 'none',
-          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-          '&:hover': { background: 'linear-gradient(135deg, #d97706, #b45309)' },
-          '&:disabled': { opacity: 0.6 },
+          mt: 1, py: 1.6, borderRadius: '14px', fontWeight: 600, fontSize: '1rem', letterSpacing: '0.01em',
+          backgroundColor: '#111827', color: '#FFFFFF', textTransform: 'none',
+          transition: 'all 0.2s ease-in-out',
+          '&:hover': { backgroundColor: '#374151' },
+          '&:disabled': { backgroundColor: '#F3F4F6', color: '#9CA3AF' },
         }}
       >
-        {formik.isSubmitting ? 'Creating agent…' : 'Create Agent Account'}
+        {formik.isSubmitting ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={18} color="inherit" />
+            <span>Provisioning...</span>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PersonAddAlt1Icon fontSize="small" />
+            <span>Create Agent Account</span>
+          </Box>
+        )}
       </Button>
     </Box>
   );
@@ -131,40 +157,39 @@ function CreateAgentForm({ onSuccess, onToast }) {
 // ── User Row ──────────────────────────────────────────────────────────────────
 function UserRow({ user, onDelete }) {
   const rc = ROLE_CONFIG[user.role] || ROLE_CONFIG.USER;
-  const initials = user.name ? user.name.substring(0, 2).toUpperCase() : '??';
 
   return (
     <Box sx={{
       display: 'flex', alignItems: 'center', gap: 2,
-      p: 1.5, mb: 1,
-      bgcolor: 'rgba(15,23,42,0.5)',
-      border: '1px solid rgba(71,85,105,0.2)',
-      borderRadius: 2.5,
+      p: 1.5, mb: 1.5,
+      bgcolor: '#FFFFFF',
+      border: '1px solid #F3F4F6',
+      borderRadius: '12px',
       transition: 'all 0.2s',
-      '&:hover': { bgcolor: 'rgba(15,23,42,0.8)', border: '1px solid rgba(71,85,105,0.4)' },
+      '&:hover': { borderColor: '#E5E7EB', bgcolor: '#FAFAFA' },
     }}>
-      <Avatar sx={{ width: 36, height: 36, fontSize: '0.8rem', fontWeight: 700, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}>
+      <Avatar sx={{ width: 40, height: 40, bgcolor: rc.bg }}>
         {rc.icon}
       </Avatar>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="body2" sx={{ fontWeight: 600, color: '#f1f5f9', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, color: '#111827', lineHeight: 1.2, mb: 0.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {user.name}
         </Typography>
-        <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.72rem' }}>
+        <Typography variant="caption" sx={{ color: '#6B7280', fontSize: '0.8rem' }}>
           {user.email}
         </Typography>
       </Box>
       <Chip
         label={user.role}
         size="small"
-        sx={{ bgcolor: rc.bg, color: rc.color, border: `1px solid ${rc.border}`, fontWeight: 700, fontSize: '0.65rem', height: 20 }}
+        sx={{ bgcolor: rc.bg, color: rc.color, border: `1px solid ${rc.border}`, fontWeight: 700, fontSize: '0.7rem', height: 24, borderRadius: '6px' }}
       />
       {user.role !== 'ADMIN' && (
         <Tooltip title={`Delete ${user.role.toLowerCase()} account`}>
           <IconButton
             size="small"
             onClick={() => onDelete(user)}
-            sx={{ color: '#475569', '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)' } }}
+            sx={{ color: '#9CA3AF', '&:hover': { color: '#EF4444', bgcolor: '#FEF2F2' } }}
           >
             <DeleteOutlineIcon fontSize="small" />
           </IconButton>
@@ -217,46 +242,69 @@ export default function AdminPanel({ onToast }) {
   const allUsers = users;
 
   return (
-    <Card sx={{
-      background: 'linear-gradient(180deg, rgba(19,27,46,0.95) 0%, rgba(15,23,42,0.95) 100%)',
-      border: '1px solid rgba(245,158,11,0.2)',
-      borderRadius: 4,
-      boxShadow: '0 25px 50px rgba(0,0,0,0.4)',
-    }}>
-      <CardContent sx={{ p: 3 }}>
+    <Card 
+      elevation={0}
+      sx={{
+        background: '#FFFFFF',
+        border: '1px solid #F3F4F6',
+        borderRadius: '24px',
+        maxWidth: '700px',
+        margin: '0 auto'
+      }}
+    >
+      <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+        
         {/* Header */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-          <Box sx={{ bgcolor: 'rgba(245,158,11,0.12)', p: 1, borderRadius: 2 }}>
-            <AdminPanelSettingsIcon sx={{ color: '#fbbf24', fontSize: '1.4rem' }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4, flexWrap: 'wrap' }}>
+          <Box 
+            sx={{ 
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 48, height: 48, bgcolor: '#F9FAFB', 
+              borderRadius: '14px', border: '1px solid #F3F4F6', color: '#111827'
+            }}
+          >
+            <AdminPanelSettingsIcon />
           </Box>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 700, color: '#f1f5f9', lineHeight: 1 }}>
+          <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="h5" sx={{ fontWeight: 800, color: '#111827', letterSpacing: '-0.02em', mb: 0.5 }}>
               Admin Panel
             </Typography>
-            <Typography variant="caption" sx={{ color: '#64748b' }}>
-              Manage agents & users · {users.length} total accounts
+            <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.9rem' }}>
+              Manage system access and team provisioning.
             </Typography>
           </Box>
-          {/* Quick stats */}
-          <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-            <Chip icon={<EngineeringIcon sx={{ fontSize: '0.8rem !important' }} />} label={`${agents.length} Agents`} size="small"
-              sx={{ bgcolor: 'rgba(245,158,11,0.1)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)', fontWeight: 600 }} />
-            <Chip icon={<GroupIcon sx={{ fontSize: '0.8rem !important' }} />} label={`${regularUsers.length} Users`} size="small"
-              sx={{ bgcolor: 'rgba(16,185,129,0.1)', color: '#34d399', border: '1px solid rgba(16,185,129,0.3)', fontWeight: 600 }} />
+
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Chip icon={<EngineeringIcon sx={{ fontSize: '0.9rem !important' }} />} label={`${agents.length} Agents`} size="small"
+              sx={{ bgcolor: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A', fontWeight: 600, borderRadius: '8px', py: 1.5 }} />
+            <Chip icon={<GroupIcon sx={{ fontSize: '0.9rem !important' }} />} label={`${regularUsers.length} Users`} size="small"
+              sx={{ bgcolor: '#ECFDF5', color: '#059669', border: '1px solid #A7F3D0', fontWeight: 600, borderRadius: '8px', py: 1.5 }} />
           </Box>
         </Box>
 
         <Tabs
           value={tab} onChange={(_, v) => setTab(v)}
           sx={{
-            mb: 3,
-            '& .MuiTab-root':       { color: '#475569', fontWeight: 600, textTransform: 'none', fontSize: '0.85rem' },
-            '& .Mui-selected':      { color: '#fbbf24 !important' },
-            '& .MuiTabs-indicator': { bgcolor: '#fbbf24' },
+            mb: 4,
+            minHeight: '44px',
+            borderBottom: '1px solid #F3F4F6',
+            '& .MuiTab-root': { color: '#6B7280', fontWeight: 600, textTransform: 'none', fontSize: '0.95rem', minHeight: '44px', py: 1, px: 3 },
+            '& .Mui-selected': { color: '#111827 !important' },
+            '& .MuiTabs-indicator': { backgroundColor: '#111827', height: '3px', borderRadius: '3px 3px 0 0' },
           }}
         >
-          <Tab id="admin-tab-create" label="➕  Create Agent"  />
-          <Tab id="admin-tab-users"  label={`👥  All Accounts (${users.length})`} />
+          <Tab 
+            icon={<AddIcon fontSize="small" />} 
+            iconPosition="start" 
+            id="admin-tab-create" 
+            label="Create Agent" 
+          />
+          <Tab 
+            icon={<PeopleAltIcon fontSize="small" />} 
+            iconPosition="start" 
+            id="admin-tab-users" 
+            label={`Directory (${users.length})`} 
+          />
         </Tabs>
 
         {/* ── Tab 0: Create Agent ─────────────────────────────────────────── */}
@@ -266,55 +314,65 @@ export default function AdminPanel({ onToast }) {
 
         {/* ── Tab 1: All Users ────────────────────────────────────────────── */}
         {tab === 1 && (
-          <>
+          <Box sx={{ maxHeight: '600px', overflowY: 'auto', pr: 1 }}>
             {error && (
-              <Alert severity="error" sx={{ mb: 2, borderRadius: 2, bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171' }}>
+              <Alert severity="error" sx={{ mb: 3, borderRadius: '12px', bgcolor: '#FEF2F2', color: '#EF4444', border: '1px solid #FCA5A5' }}>
                 {error}
               </Alert>
             )}
 
             {loading ? (
               [...Array(4)].map((_, i) => (
-                <Skeleton key={i} variant="rounded" height={60} sx={{ bgcolor: 'rgba(255,255,255,0.04)', mb: 1, borderRadius: 2 }} />
+                <Skeleton key={i} variant="rounded" height={72} sx={{ bgcolor: '#F9FAFB', mb: 1.5, borderRadius: '12px' }} />
               ))
             ) : allUsers.length === 0 ? (
-              <Typography variant="body2" sx={{ color: '#475569', textAlign: 'center', py: 4 }}>
-                No accounts found
-              </Typography>
+              <Box sx={{ textAlign: 'center', py: 6, bgcolor: '#F9FAFB', borderRadius: '16px', border: '1px dashed #E5E7EB' }}>
+                <Typography variant="body1" sx={{ color: '#4B5563', fontWeight: 600 }}>No accounts found</Typography>
+                <Typography variant="body2" sx={{ color: '#9CA3AF', mt: 1 }}>The system directory is currently empty.</Typography>
+              </Box>
             ) : (
               <>
                 {/* Admins */}
                 {allUsers.filter(u => u.role === 'ADMIN').length > 0 && (
-                  <>
-                    <Typography variant="caption" sx={{ color: '#f87171', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', mb: 1, display: 'block' }}>
-                      👑 Administrators
-                    </Typography>
+                  <Box sx={{ mb: 4 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, pl: 0.5 }}>
+                      <SecurityIcon sx={{ color: '#9CA3AF', fontSize: '1rem' }} />
+                      <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                        Administrators
+                      </Typography>
+                    </Box>
                     {allUsers.filter(u => u.role === 'ADMIN').map(u => <UserRow key={u.id} user={u} onDelete={handleDelete} />)}
-                    <Divider sx={{ borderColor: 'rgba(71,85,105,0.2)', my: 2 }} />
-                  </>
+                  </Box>
                 )}
+                
                 {/* Agents */}
                 {agents.length > 0 && (
-                  <>
-                    <Typography variant="caption" sx={{ color: '#fbbf24', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', mb: 1, display: 'block' }}>
-                      🛠️ Agents
-                    </Typography>
+                  <Box sx={{ mb: 4 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, pl: 0.5 }}>
+                      <SupportAgentIcon sx={{ color: '#9CA3AF', fontSize: '1rem' }} />
+                      <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                        Support Agents
+                      </Typography>
+                    </Box>
                     {agents.map(u => <UserRow key={u.id} user={u} onDelete={handleDelete} />)}
-                    <Divider sx={{ borderColor: 'rgba(71,85,105,0.2)', my: 2 }} />
-                  </>
+                  </Box>
                 )}
+                
                 {/* Users */}
                 {regularUsers.length > 0 && (
-                  <>
-                    <Typography variant="caption" sx={{ color: '#34d399', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', mb: 1, display: 'block' }}>
-                      👤 Users
-                    </Typography>
+                  <Box sx={{ mb: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, pl: 0.5 }}>
+                      <PersonIcon sx={{ color: '#9CA3AF', fontSize: '1rem' }} />
+                      <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                        Standard Users
+                      </Typography>
+                    </Box>
                     {regularUsers.map(u => <UserRow key={u.id} user={u} onDelete={handleDelete} />)}
-                  </>
+                  </Box>
                 )}
               </>
             )}
-          </>
+          </Box>
         )}
       </CardContent>
     </Card>
