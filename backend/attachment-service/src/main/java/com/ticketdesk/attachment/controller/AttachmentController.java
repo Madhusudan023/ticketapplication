@@ -1,22 +1,26 @@
 package com.ticketdesk.attachment.controller;
 
 import com.ticketdesk.attachment.dto.ApiResponse;
+import com.ticketdesk.attachment.dto.RecordUploadRequest;
 import com.ticketdesk.attachment.entity.Attachment;
 import com.ticketdesk.attachment.repository.AttachmentRepository;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.nio.file.*;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+
+import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -26,48 +30,89 @@ public class AttachmentController {
 
     private final AttachmentRepository repo;
 
-    @Value("${app.upload.dir:./uploads}")
-    private String uploadDir;
+    @Value("${app.s3.bucket:}")
+    private String bucketName;
+
+    @Value("${app.aws.region:us-east-1}")
+    private String awsRegion;
 
     public AttachmentController(AttachmentRepository repo) {
         this.repo = repo;
     }
 
     /**
-     * POST /api/v1/attachments/ticket/{ticketId}/upload
-     * Upload a file and save metadata to DB.
+     * Item 23 — GET /api/v1/attachments/presigned-url
+     * Generates a presigned S3 PUT URL so the frontend can upload
+     * the file directly to S3 without going through the API.
      */
-    @PostMapping("/ticket/{ticketId}/upload")
-    public ResponseEntity<ApiResponse<Attachment>> upload(
-            @PathVariable Long ticketId,
-            @RequestParam("file") MultipartFile file) throws IOException {
+    @GetMapping("/presigned-url")
+    public ResponseEntity<ApiResponse<Map<String, String>>> getPresignedUrl(
+            @RequestParam Long ticketId,
+            @RequestParam String fileName,
+            @RequestParam(defaultValue = "application/octet-stream") String contentType) {
 
-        if (file.isEmpty()) {
-            return ResponseEntity.badRequest()
-                    .body(ApiResponse.error("File must not be empty"));
+        if (bucketName == null || bucketName.isBlank()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error("S3 bucket not configured"));
         }
 
-        // Build target directory
-        Path dir = Paths.get(uploadDir, String.valueOf(ticketId));
-        Files.createDirectories(dir);
+        try {
+            String key = "attachments/" + ticketId + "/" + UUID.randomUUID() + "_" + fileName;
 
-        // Unique file name to avoid collisions
-        String uniqueName = UUID.randomUUID() + "_" + file.getOriginalFilename();
-        Path target = dir.resolve(uniqueName);
-        Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            S3Presigner presigner = S3Presigner.builder()
+                    .region(Region.of(awsRegion))
+                    .credentialsProvider(DefaultCredentialsProvider.create())
+                    .build();
 
-        // Persist metadata
-        Attachment a = new Attachment();
-        a.setTicketId(ticketId);
-        a.setOriginalFileName(file.getOriginalFilename());
-        a.setFileName(uniqueName);
-        a.setContentType(file.getContentType());
-        a.setFileSize(file.getSize());
-        a.setStorageUrl("/uploads/" + ticketId + "/" + uniqueName);
+            PutObjectRequest putReq = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .contentType(contentType)
+                    .build();
 
-        Attachment saved = repo.save(a);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success("File uploaded successfully", saved));
+            PutObjectPresignRequest presignReq = PutObjectPresignRequest.builder()
+                    .signatureDuration(Duration.ofMinutes(15))
+                    .putObjectRequest(putReq)
+                    .build();
+
+            PresignedPutObjectRequest presigned = presigner.presignPutObject(presignReq);
+            presigner.close();
+
+            Map<String, String> result = new HashMap<>();
+            result.put("uploadUrl", presigned.url().toString());
+            result.put("key", key);
+            result.put("storageUrl", "s3://" + bucketName + "/" + key);
+            result.put("bucket", bucketName);
+
+            return ResponseEntity.ok(ApiResponse.success("Presigned URL generated (valid 15 min)", result));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Failed to generate presigned URL: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Item 24 — POST /api/v1/attachments/record
+     * Called by the Lambda after a successful S3 upload to persist metadata.
+     */
+    @PostMapping("/record")
+    public ResponseEntity<ApiResponse<Attachment>> recordUpload(@RequestBody RecordUploadRequest req) {
+        try {
+            Attachment a = new Attachment();
+            a.setTicketId(req.getTicketId());
+            a.setFileName(req.getFileName() != null ? req.getFileName() : "unknown");
+            a.setOriginalFileName(req.getOriginalFileName() != null ? req.getOriginalFileName() : req.getFileName());
+            a.setStorageUrl(req.getStorageUrl());
+            a.setFileSize(req.getFileSize() != null ? req.getFileSize() : 0L);
+            a.setContentType(req.getContentType() != null ? req.getContentType() : "application/octet-stream");
+            Attachment saved = repo.save(a);
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(ApiResponse.success("Attachment recorded from S3 upload", saved));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Failed to record attachment: " + e.getMessage()));
+        }
     }
 
     /**
@@ -76,41 +121,11 @@ public class AttachmentController {
      */
     @GetMapping("/ticket/{ticketId}")
     public ResponseEntity<ApiResponse<List<Attachment>>> listByTicket(@PathVariable Long ticketId) {
-        List<Attachment> attachments = repo.findByTicketId(ticketId);
-        return ResponseEntity.ok(ApiResponse.success("Attachments retrieved", attachments));
-    }
-
-    /**
-     * GET /api/v1/attachments/{id}/download
-     * Stream the file back to the caller.
-     */
-    @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable Long id) {
-        Attachment a = repo.findById(id).orElse(null);
-        if (a == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        try {
-            Path filePath = Paths.get(uploadDir, String.valueOf(a.getTicketId()), a.getFileName());
-            Resource resource = new UrlResource(filePath.toUri());
-            if (!resource.exists()) {
-                return ResponseEntity.notFound().build();
-            }
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(
-                            a.getContentType() != null ? a.getContentType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
-                    .header(HttpHeaders.CONTENT_DISPOSITION,
-                            "attachment; filename=\"" + a.getOriginalFileName() + "\"")
-                    .body(resource);
-        } catch (MalformedURLException e) {
-            return ResponseEntity.internalServerError().build();
-        }
+        return ResponseEntity.ok(ApiResponse.success("Attachments retrieved", repo.findByTicketId(ticketId)));
     }
 
     /**
      * DELETE /api/v1/attachments/{id}
-     * Delete metadata record and the physical file.
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
@@ -119,14 +134,18 @@ public class AttachmentController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResponse.error("Attachment not found with id: " + id));
         }
-
-        // Delete physical file
-        try {
-            Path filePath = Paths.get(uploadDir, String.valueOf(a.getTicketId()), a.getFileName());
-            Files.deleteIfExists(filePath);
-        } catch (IOException ignored) { /* best-effort */ }
-
         repo.delete(a);
         return ResponseEntity.ok(ApiResponse.success("Attachment deleted", null));
+    }
+
+    /**
+     * GET /api/v1/attachments/health
+     */
+    @GetMapping("/health")
+    public ResponseEntity<ApiResponse<Map<String, String>>> health() {
+        return ResponseEntity.ok(ApiResponse.success("OK", Map.of(
+            "status", "UP",
+            "bucket", bucketName != null ? bucketName : "not-configured"
+        )));
     }
 }

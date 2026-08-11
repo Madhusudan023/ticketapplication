@@ -8,16 +8,17 @@ resource "aws_ecs_cluster" "main" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CLOUDWATCH LOG GROUP
+# CLOUDWATCH LOG GROUP (Item 28 — finite retention)
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${var.project_name}"
   retention_in_days = 7
   lifecycle { ignore_changes = all }
+  tags = { Name = "${var.project_name}-ecs-logs" }
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# IAM ROLES
+# IAM ROLES (Item 32 — scoped task role)
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "ecs_execution_role" {
   name = "${var.project_name}-ecs-execution-role"
@@ -40,6 +41,20 @@ resource "aws_iam_role_policy_attachment" "ecs_ecr_policy" {
   lifecycle { ignore_changes = all }
 }
 
+# Allow execution role to read SSM SecureString parameters (for secrets injection)
+resource "aws_iam_role_policy" "ecs_ssm_read" {
+  name = "ecs-ssm-read"
+  role = aws_iam_role.ecs_execution_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "kms:Decrypt"]
+      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/${var.project_name}/*"
+    }]
+  })
+}
+
 resource "aws_iam_role" "ecs_task_role" {
   name = "${var.project_name}-ecs-task-role"
   assume_role_policy = jsonencode({
@@ -47,6 +62,36 @@ resource "aws_iam_role" "ecs_task_role" {
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" } }]
   })
   lifecycle { ignore_changes = all }
+}
+
+# Item 32 — scoped S3 access for attachment-service presigned URL generation
+resource "aws_iam_role_policy" "ecs_task_s3" {
+  name = "ecs-task-s3-attachments"
+  role = aws_iam_role.ecs_task_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GeneratePresignedUrl"
+        ]
+        Resource = [
+          "${aws_s3_bucket.attachments.arn}",
+          "${aws_s3_bucket.attachments.arn}/*"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter", "ssm:GetParameters"]
+        Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/${var.project_name}/*"
+      }
+    ]
+  })
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -61,25 +106,24 @@ locals {
       "awslogs-create-group" = "true"
     }
   }
-  # Eureka URL via ALB
   eureka_url = "http://${aws_lb.main.dns_name}:8761/eureka/"
+  rds_host   = aws_db_instance.mysql.address
+  db_url     = "jdbc:mysql://${local.rds_host}:3306/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
 
-  # RDS hostname only (address = hostname without port)
-  rds_host = aws_db_instance.mysql.address
-
-  # Unified DB URL — explicit port 3306 after hostname
-  db_url = "jdbc:mysql://${local.rds_host}:3306/ticketdesk_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
-
-  # Common env vars passed to every service that needs Eureka
   eureka_env = [
     { name = "EUREKA_CLIENT_SERVICEURL_DEFAULTZONE", value = local.eureka_url },
     { name = "EUREKA_URI",                           value = local.eureka_url }
   ]
+
+  db_env = [
+    { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
+    { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
+    { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
+  ]
 }
 
-
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. EUREKA SERVER
+# 1. EUREKA SERVER — private subnet (Item 10/11)
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "eureka" {
   family                   = "${var.project_name}-eureka"
@@ -107,9 +151,9 @@ resource "aws_ecs_service" "eureka" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id   # Item 10 — private subnet
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false                       # Item 11 — no public IP
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.eureka.arn
@@ -118,11 +162,11 @@ resource "aws_ecs_service" "eureka" {
   }
   health_check_grace_period_seconds = 120
   lifecycle { ignore_changes = [desired_count] }
-  depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy]
+  depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy, aws_nat_gateway.main]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. API GATEWAY
+# 2. API GATEWAY — private subnet
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "api_gateway" {
   family                   = "${var.project_name}-api-gateway"
@@ -150,9 +194,9 @@ resource "aws_ecs_service" "api_gateway" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.api_gateway.arn
@@ -165,7 +209,7 @@ resource "aws_ecs_service" "api_gateway" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. AUTH SERVICE
+# 3. AUTH SERVICE — private subnet
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "auth_service" {
   family                   = "${var.project_name}-auth-service"
@@ -180,11 +224,7 @@ resource "aws_ecs_task_definition" "auth_service" {
     image     = "${aws_ecr_repository.auth_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8089, hostPort = 8089, protocol = "tcp" }]
-    environment = concat(local.eureka_env, [
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
-      { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ])
+    environment = concat(local.eureka_env, local.db_env)
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "auth" }) }
   }])
 }
@@ -197,16 +237,16 @@ resource "aws_ecs_service" "auth_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4. TICKET SERVICE
+# 4. TICKET SERVICE — private subnet
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "ticket_service" {
   family                   = "${var.project_name}-ticket-service"
@@ -221,11 +261,7 @@ resource "aws_ecs_task_definition" "ticket_service" {
     image     = "${aws_ecr_repository.ticket_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8082, hostPort = 8082, protocol = "tcp" }]
-    environment = concat(local.eureka_env, [
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
-      { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ])
+    environment = concat(local.eureka_env, local.db_env)
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "ticket" }) }
   }])
 }
@@ -238,16 +274,16 @@ resource "aws_ecs_service" "ticket_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5. COMMENT SERVICE
+# 5. COMMENT SERVICE — private subnet
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "comment_service" {
   family                   = "${var.project_name}-comment-service"
@@ -262,11 +298,7 @@ resource "aws_ecs_task_definition" "comment_service" {
     image     = "${aws_ecr_repository.comment_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8084, hostPort = 8084, protocol = "tcp" }]
-    environment = concat(local.eureka_env, [
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
-      { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ])
+    environment = concat(local.eureka_env, local.db_env)
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "comment" }) }
   }])
 }
@@ -279,16 +311,16 @@ resource "aws_ecs_service" "comment_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6. ATTACHMENT SERVICE
+# 6. ATTACHMENT SERVICE — private subnet + S3 bucket env (Items 23/24)
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "attachment_service" {
   family                   = "${var.project_name}-attachment-service"
@@ -303,10 +335,9 @@ resource "aws_ecs_task_definition" "attachment_service" {
     image     = "${aws_ecr_repository.attachment_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8085, hostPort = 8085, protocol = "tcp" }]
-    environment = concat(local.eureka_env, [
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
-      { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
+    environment = concat(local.eureka_env, local.db_env, [
+      { name = "APP_S3_BUCKET",  value = aws_s3_bucket.attachments.bucket },
+      { name = "APP_AWS_REGION", value = var.aws_region }
     ])
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "attachment" }) }
   }])
@@ -320,16 +351,16 @@ resource "aws_ecs_service" "attachment_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 7. DASHBOARD SERVICE
+# 7. DASHBOARD SERVICE — private subnet
 # ──────────────────────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "dashboard_service" {
   family                   = "${var.project_name}-dashboard-service"
@@ -344,11 +375,7 @@ resource "aws_ecs_task_definition" "dashboard_service" {
     image     = "${aws_ecr_repository.dashboard_service.repository_url}:latest"
     essential = true
     portMappings = [{ containerPort = 8087, hostPort = 8087, protocol = "tcp" }]
-    environment = concat(local.eureka_env, [
-      { name = "SPRING_DATASOURCE_URL",      value = local.db_url },
-      { name = "SPRING_DATASOURCE_USERNAME", value = var.db_username },
-      { name = "SPRING_DATASOURCE_PASSWORD", value = var.db_password }
-    ])
+    environment = concat(local.eureka_env, local.db_env)
     logConfiguration = { logDriver = local.log_config.logDriver, options = merge(local.log_config.options, { "awslogs-stream-prefix" = "dashboard" }) }
   }])
 }
@@ -361,9 +388,9 @@ resource "aws_ecs_service" "dashboard_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.public[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]

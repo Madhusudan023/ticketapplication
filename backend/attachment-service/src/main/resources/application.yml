@@ -1,4 +1,4 @@
-﻿server:
+server:
   port: 8085
 
 spring:
@@ -38,3 +38,10 @@ management:
     web:
       exposure:
         include: health,info
+
+# Item 23 — S3 presigned URL config (injected by ECS task definition env vars)
+app:
+  s3:
+    bucket: ${APP_S3_BUCKET:}
+  aws:
+    region: ${APP_AWS_REGION:us-east-1}
