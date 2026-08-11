@@ -288,6 +288,18 @@ jobs:
             terraform import aws_db_instance.mysql ${P}-db 2>/dev/null || true
 
           echo "=== Importing Security Groups ==="
+          SG_ALB=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=${P}-alb-sg" \
+            --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
+          [ -n "$SG_ALB" ] && [ "$SG_ALB" != "None" ] && \
+            terraform import aws_security_group.alb_sg "$SG_ALB" 2>/dev/null || true
+
+          SG_ECS=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=${P}-ecs-tasks-sg" \
+            --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
+          [ -n "$SG_ECS" ] && [ "$SG_ECS" != "None" ] && \
+            terraform import aws_security_group.ecs_tasks "$SG_ECS" 2>/dev/null || true
+
           SG_RDS=$(aws ec2 describe-security-groups \
             --filters "Name=group-name,Values=${P}-rds-sg" \
             --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
