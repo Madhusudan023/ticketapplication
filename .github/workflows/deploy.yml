@@ -153,6 +153,10 @@ jobs:
           echo "  ✅ RDS SG preserved (stable across deploys)"
 
           echo "--- [9] Delete Lambda & Logs ---"
+          ATT_B=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'${P}-attachments')].Name | [0]" --output text 2>/dev/null || echo "")
+          if [ -n "$ATT_B" ] && [ "$ATT_B" != "None" ]; then
+            aws s3api put-bucket-notification-configuration --bucket "$ATT_B" --notification-configuration '{}' --region $R 2>/dev/null || true
+          fi
           aws lambda delete-function --function-name ${P}-s3-attachment-processor --region $R 2>/dev/null || true
           aws logs delete-log-group --log-group-name "/aws/lambda/${P}-s3-attachment-processor" --region $R 2>/dev/null || true
 
@@ -363,6 +367,7 @@ jobs:
             terraform import aws_s3_bucket.attachments "$ATT_BUCKET" 2>/dev/null || true
 
           echo "=== Importing Lambda & Logs ==="
+          python3 -c "import zipfile; z=zipfile.ZipFile('lambda/function.zip','w'); z.write('lambda/index.py','index.py'); z.close()" 2>/dev/null || true
           LAMBDA_EXISTS=$(aws lambda get-function --function-name ${P}-s3-attachment-processor --query 'Configuration.FunctionName' --output text --region $R 2>/dev/null || echo "")
           [ -n "$LAMBDA_EXISTS" ] && [ "$LAMBDA_EXISTS" != "None" ] && \
             terraform import aws_lambda_function.s3_processor ${P}-s3-attachment-processor 2>/dev/null || true

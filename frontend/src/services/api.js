@@ -105,17 +105,51 @@ export const ApiService = {
     return res.data;
   },
 
-  // ── Attachments ───────────────────────────────────────────────────────────
+  // ── Attachments (Items 23 & 24 — Presigned S3 Upload + Lambda event trigger) ─────
   getAttachments: async (ticketId) => {
     const res = await http.get(`/attachments/ticket/${ticketId}`);
     return res.data;
   },
 
   uploadAttachment: async (ticketId, file) => {
-    const form = new FormData();
-    form.append('file', file);
-    const res = await httpMultipart.post(`/attachments/ticket/${ticketId}/upload`, form);
-    return res.data;
+    const contentType = file.type || 'application/octet-stream';
+
+    // Step 1: Request presigned S3 PUT URL from attachment-service
+    const presignRes = await http.get('/attachments/presigned-url', {
+      params: {
+        ticketId,
+        fileName: file.name,
+        contentType
+      }
+    });
+
+    const payload = presignRes.data?.data || presignRes.data;
+    const { uploadUrl, storageUrl, key } = payload;
+
+    // Step 2: Upload file directly from browser to S3 bucket via presigned URL
+    await axios.put(uploadUrl, file, {
+      headers: { 'Content-Type': contentType }
+    });
+
+    // Step 3: Record metadata in DB (S3 ObjectCreated event also triggers Python Lambda)
+    try {
+      await http.post('/attachments/record', {
+        ticketId: Number(ticketId),
+        fileName: file.name,
+        originalFileName: file.name,
+        storageUrl,
+        fileSize: file.size,
+        contentType
+      });
+    } catch (err) {
+      console.log('[S3 Presigned Upload] Record endpoint call deferred to S3 Lambda event:', err.message);
+    }
+
+    return {
+      success: true,
+      message: 'File uploaded successfully to S3',
+      data: { storageUrl, key, fileName: file.name }
+    };
   },
 
   downloadAttachment: (attachmentId) => `${API_BASE}/attachments/${attachmentId}/download`,
