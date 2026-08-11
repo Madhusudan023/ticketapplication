@@ -35,8 +35,8 @@ resource "aws_db_instance" "mysql" {
   skip_final_snapshot    = true
   publicly_accessible    = false
 
-  # Item 21 — automated backups with non-zero retention
-  backup_retention_period = 7
+  # Item 21 — automated backups (1 day for Free Tier compatibility)
+  backup_retention_period = 1
   backup_window           = "03:00-04:00"
   maintenance_window      = "Mon:04:00-Mon:05:00"
 

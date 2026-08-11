@@ -117,10 +117,14 @@ jobs:
           done
 
           echo "--- [4] Delete IAM Roles ---"
-          for role in ${P}-ecs-execution-role ${P}-ecs-task-role; do
+          for role in ${P}-ecs-execution-role ${P}-ecs-task-role ${P}-lambda-exec-role; do
             for pol in $(aws iam list-attached-role-policies --role-name "$role" \
-              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null); do
+              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo ""); do
               aws iam detach-role-policy --role-name "$role" --policy-arn "$pol" 2>/dev/null || true
+            done
+            for ipol in $(aws iam list-role-policies --role-name "$role" \
+              --query 'PolicyNames[*]' --output text 2>/dev/null || echo ""); do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$ipol" 2>/dev/null || true
             done
             aws iam delete-role --role-name "$role" 2>/dev/null || true
           done
@@ -318,6 +322,24 @@ jobs:
           else
             echo "No existing S3 bucket — will be created fresh."
           fi
+
+          echo "=== Importing IAM Roles ==="
+          terraform import aws_iam_role.ecs_execution_role ${P}-ecs-execution-role 2>/dev/null || true
+          terraform import aws_iam_role.ecs_task_role ${P}-ecs-task-role 2>/dev/null || true
+          terraform import aws_iam_role.lambda_exec ${P}-lambda-exec-role 2>/dev/null || true
+
+          echo "=== Importing SSM Parameters ==="
+          for param in db-url db-username db-password eureka-url jwt-secret attachment-bucket aws-region; do
+            tf_p=$(echo $param | tr '-' '_')
+            terraform import "aws_ssm_parameter.${tf_p}" "/${P}/${param}" 2>/dev/null || true
+          done
+
+          echo "=== Importing Attachment S3 Bucket ==="
+          ATT_BUCKET=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name,'${P}-attachments')].Name | [0]" \
+            --output text 2>/dev/null || echo "")
+          [ -n "$ATT_BUCKET" ] && [ "$ATT_BUCKET" != "None" ] && \
+            terraform import aws_s3_bucket.attachments "$ATT_BUCKET" 2>/dev/null || true
 
           echo "=== Import complete ==="
 
