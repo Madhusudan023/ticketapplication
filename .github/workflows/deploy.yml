@@ -152,6 +152,15 @@ jobs:
           done
           echo "  ✅ RDS SG preserved (stable across deploys)"
 
+          echo "--- [9] Delete Lambda & Logs ---"
+          aws lambda delete-function --function-name ${P}-s3-attachment-processor --region $R 2>/dev/null || true
+          aws logs delete-log-group --log-group-name "/aws/lambda/${P}-s3-attachment-processor" --region $R 2>/dev/null || true
+
+          echo "--- [10] Delete Alarms & SNS ---"
+          aws cloudwatch delete-alarms --alarm-names "${P}-high-cpu" "${P}-high-memory" "${P}-alb-5xx-errors" --region $R 2>/dev/null || true
+          SNS_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn,'${P}-alerts')].TopicArn | [0]" --output text --region $R 2>/dev/null || echo "")
+          [ -n "$SNS_ARN" ] && [ "$SNS_ARN" != "None" ] && aws sns delete-topic --topic-arn "$SNS_ARN" --region $R 2>/dev/null || true
+
           echo "=== Pre-cleanup complete ==="
 
       # ──────────────────────────────────────────────────────
@@ -352,6 +361,20 @@ jobs:
             --output text 2>/dev/null || echo "")
           [ -n "$ATT_BUCKET" ] && [ "$ATT_BUCKET" != "None" ] && \
             terraform import aws_s3_bucket.attachments "$ATT_BUCKET" 2>/dev/null || true
+
+          echo "=== Importing Lambda & Logs ==="
+          LAMBDA_EXISTS=$(aws lambda get-function --function-name ${P}-s3-attachment-processor --query 'Configuration.FunctionName' --output text --region $R 2>/dev/null || echo "")
+          [ -n "$LAMBDA_EXISTS" ] && [ "$LAMBDA_EXISTS" != "None" ] && \
+            terraform import aws_lambda_function.s3_processor ${P}-s3-attachment-processor 2>/dev/null || true
+          terraform import aws_cloudwatch_log_group.lambda "/aws/lambda/${P}-s3-attachment-processor" 2>/dev/null || true
+
+          echo "=== Importing SNS & Alarms ==="
+          SNS_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn,'${P}-alerts')].TopicArn | [0]" --output text --region $R 2>/dev/null || echo "")
+          [ -n "$SNS_ARN" ] && [ "$SNS_ARN" != "None" ] && \
+            terraform import aws_sns_topic.alerts "$SNS_ARN" 2>/dev/null || true
+          terraform import aws_cloudwatch_metric_alarm.high_cpu ${P}-high-cpu 2>/dev/null || true
+          terraform import aws_cloudwatch_metric_alarm.high_memory ${P}-high-memory 2>/dev/null || true
+          terraform import aws_cloudwatch_metric_alarm.alb_5xx ${P}-alb-5xx-errors 2>/dev/null || true
 
           echo "=== Import complete ==="
 
