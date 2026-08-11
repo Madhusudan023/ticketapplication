@@ -35,23 +35,7 @@ resource "aws_internet_gateway" "igw" {
   tags = { Name = "${var.project_name}-igw" }
 }
 
-# ── NAT Gateway (Item 10/11: ECS tasks in private subnets need outbound internet) ──
-resource "aws_eip" "nat" {
-  domain     = "vpc"
-  depends_on = [aws_internet_gateway.igw]
-  lifecycle { ignore_changes = all }
-  tags = { Name = "${var.project_name}-nat-eip" }
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-  depends_on    = [aws_internet_gateway.igw]
-  lifecycle { ignore_changes = all }
-  tags = { Name = "${var.project_name}-nat-gw" }
-}
-
-# ── Public Route Table (ALB lives here) ──
+# ── Public Route Table (Internet Gateway access) ──
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
   route {
@@ -69,13 +53,9 @@ resource "aws_route_table_association" "public" {
   lifecycle { ignore_changes = all }
 }
 
-# ── Private Route Table (ECS tasks route outbound via NAT) ──
+# ── Private Route Table ──
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
   lifecycle { ignore_changes = all }
   tags = { Name = "${var.project_name}-private-rt" }
 }

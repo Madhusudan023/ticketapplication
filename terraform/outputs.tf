@@ -13,15 +13,9 @@ output "api_gateway_url" {
   value       = "http://${aws_lb.main.dns_name}"
 }
 
-# Item 22 — Frontend served via CloudFront, NOT public S3
-output "frontend_url" {
-  description = "React Frontend URL (via CloudFront CDN)"
-  value       = "https://${aws_cloudfront_distribution.frontend.domain_name}"
-}
-
-output "cloudfront_distribution_id" {
-  description = "CloudFront Distribution ID (needed for cache invalidation)"
-  value       = aws_cloudfront_distribution.frontend.id
+output "frontend_s3_url" {
+  description = "React Frontend S3 Static Website URL (Free Tier)"
+  value       = "http://${aws_s3_bucket_website_configuration.frontend.website_endpoint}"
 }
 
 output "attachment_bucket_name" {
@@ -42,11 +36,6 @@ output "rds_endpoint" {
 output "ecs_cluster_name" {
   description = "ECS Cluster Name"
   value       = aws_ecs_cluster.main.name
-}
-
-output "nat_gateway_ip" {
-  description = "NAT Gateway Elastic IP (outbound IP for private ECS tasks)"
-  value       = aws_eip.nat.public_ip
 }
 
 output "ecr_repository_urls" {

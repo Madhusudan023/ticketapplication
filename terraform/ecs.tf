@@ -151,9 +151,9 @@ resource "aws_ecs_service" "eureka" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id   # Item 10 — private subnet
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false                       # Item 11 — no public IP
+    assign_public_ip = true
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.eureka.arn
@@ -162,7 +162,7 @@ resource "aws_ecs_service" "eureka" {
   }
   health_check_grace_period_seconds = 120
   lifecycle { ignore_changes = [desired_count] }
-  depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy, aws_nat_gateway.main]
+  depends_on = [aws_lb_listener.eureka, aws_iam_role_policy_attachment.ecs_execution_policy]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,9 +194,9 @@ resource "aws_ecs_service" "api_gateway" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.api_gateway.arn
@@ -237,9 +237,9 @@ resource "aws_ecs_service" "auth_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
@@ -274,9 +274,9 @@ resource "aws_ecs_service" "ticket_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
@@ -311,9 +311,9 @@ resource "aws_ecs_service" "comment_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
@@ -351,9 +351,9 @@ resource "aws_ecs_service" "attachment_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]
@@ -388,9 +388,9 @@ resource "aws_ecs_service" "dashboard_service" {
   launch_type          = "FARGATE"
   force_new_deployment = true
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_ecs_service.eureka, aws_db_instance.mysql]

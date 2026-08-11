@@ -465,21 +465,7 @@ jobs:
             echo "No S3 bucket found"
           fi
 
-      # Item 22 — Invalidate CloudFront cache so new assets are served immediately
-      - name: Invalidate CloudFront Cache
-        if: env.AWS_KEY != ''
-        run: |
-          CF_ID=$(aws cloudfront list-distributions \
-            --query "DistributionList.Items[?Comment=='TicketDesk React frontend'].Id" \
-            --output text 2>/dev/null | head -n 1 || echo "")
-          if [ -n "$CF_ID" ] && [ "$CF_ID" != "None" ]; then
-            aws cloudfront create-invalidation \
-              --distribution-id "$CF_ID" \
-              --paths "/*"
-            echo "✅ CloudFront cache invalidated: $CF_ID"
-          else
-            echo "CloudFront distribution not found yet — skipping invalidation"
-          fi
+
 
       # ──────────────────────────────────────────────────────
       # 8. Build & Push ALL Docker Images to ECR
@@ -635,29 +621,26 @@ jobs:
         working-directory: ./terraform
         run: |
           ALB=$(terraform output -raw alb_dns_name 2>/dev/null || echo "N/A")
-          FRONT=$(terraform output -raw frontend_url 2>/dev/null || echo "N/A")
-          CF_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "N/A")
+          FRONT=$(terraform output -raw frontend_s3_url 2>/dev/null || echo "N/A")
           SNS=$(terraform output -raw sns_alerts_arn 2>/dev/null || echo "N/A")
           RDS=$(terraform output -raw rds_endpoint 2>/dev/null || echo "N/A")
           echo ""
           echo "======================================================="
           echo " DEPLOYMENT COMPLETE!"
           echo "======================================================="
-          echo " Frontend (CloudFront) : $FRONT"
-          echo " CloudFront Dist ID    : $CF_ID"
-          echo " API Gateway           : http://$ALB/api/v1"
-          echo " Eureka Dashboard      : http://$ALB:8761"
-          echo " RDS Endpoint          : $RDS"
-          echo " Alerts SNS Topic      : $SNS"
+          echo " Frontend (S3 Website) : $FRONT"
+          echo " API Gateway            : http://$ALB/api/v1"
+          echo " Eureka Dashboard       : http://$ALB:8761"
+          echo " RDS Endpoint           : $RDS"
+          echo " Alerts SNS Topic       : $SNS"
           echo "======================================================="
           echo " Admin Login  : admin@ticketdesk.com / admin123"
           echo " User Login   : register a new account from the frontend"
           echo "======================================================="
-          echo " SECURITY:"
-          echo "  - S3 bucket is PRIVATE (CloudFront OAC only)"
-          echo "  - ECS tasks in PRIVATE subnets (NAT Gateway egress)"
-          echo "  - RDS not publicly accessible"
-          echo "  - Secrets in Secrets Manager + SSM Parameter Store"
+          echo " FREE TIER COMPLIANCE:"
+          echo "  - Public S3 Static Website Hosting (No CloudFront)"
+          echo "  - Dynamic Public IPs for ECS Tasks (No NAT Gateway / EIP cost)"
+          echo "  - RDS Encryption at Rest & Parameter Store Secrets"
           echo "  - Secret scan (Gitleaks) ran before this deploy"
           echo "======================================================="
 
