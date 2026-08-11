@@ -29,8 +29,8 @@ jobs:
           echo " 💣 INITIATING COMPLETE TEARDOWN OF ALL RESOURCES"
           echo "======================================================"
 
-          # ── 1. ECS Services & Cluster ──────────────────────
-          echo "Stopping ECS services..."
+          # ── 1. ECS Services & Cluster ──────────────────────────
+          echo "--- [1] Stopping ECS services ---"
           for svc in ${P}-eureka-service ${P}-gateway-service ${P}-auth-service \
             ${P}-ticket-service ${P}-comment-service ${P}-attachment-service ${P}-dashboard-service; do
             aws ecs update-service --cluster ${P}-cluster --service "$svc" \
@@ -40,8 +40,76 @@ jobs:
           done
           aws ecs delete-cluster --cluster ${P}-cluster --region $R 2>/dev/null || true
 
-          # ── 2. ALB, Listeners & Target Groups ──────────────
-          echo "Deleting ALB..."
+          # ── 2. Lambda Function & S3 Event Notification ─────────
+          echo "--- [2] Deleting Lambda function ---"
+          aws lambda delete-function \
+            --function-name ${P}-s3-attachment-processor \
+            --region $R 2>/dev/null || true
+
+          # ── 3. CloudWatch Alarms ────────────────────────────────
+          echo "--- [3] Deleting CloudWatch alarms ---"
+          aws cloudwatch delete-alarms \
+            --alarm-names \
+              "${P}-high-cpu" \
+              "${P}-high-memory" \
+              "${P}-alb-5xx-errors" \
+            --region $R 2>/dev/null || true
+
+          # ── 4. SNS Topic ────────────────────────────────────────
+          echo "--- [4] Deleting SNS topic ---"
+          SNS_ARN=$(aws sns list-topics \
+            --query "Topics[?contains(TopicArn,'${P}-alerts')].TopicArn" \
+            --output text --region $R 2>/dev/null || echo "")
+          if [ -n "$SNS_ARN" ] && [ "$SNS_ARN" != "None" ]; then
+            aws sns delete-topic --topic-arn "$SNS_ARN" --region $R 2>/dev/null || true
+            echo "  Deleted SNS topic: $SNS_ARN"
+          fi
+
+          # ── 5. SSM Parameters ───────────────────────────────────
+          echo "--- [5] Deleting SSM Parameters ---"
+          for param in db-url db-username db-password eureka-url jwt-secret attachment-bucket aws-region; do
+            aws ssm delete-parameter \
+              --name "/${P}/${param}" \
+              --region $R 2>/dev/null || true
+          done
+
+          # ── 6. CloudFront Distribution ──────────────────────────
+          echo "--- [6] Disabling and deleting CloudFront distribution ---"
+          CF_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?Comment=='TicketDesk React frontend'].Id" \
+            --output text 2>/dev/null | head -n 1 || echo "")
+          if [ -n "$CF_ID" ] && [ "$CF_ID" != "None" ]; then
+            echo "  Found CloudFront distribution: $CF_ID — disabling..."
+            ETAG=$(aws cloudfront get-distribution-config --id "$CF_ID" \
+              --query 'ETag' --output text 2>/dev/null || echo "")
+            CONFIG=$(aws cloudfront get-distribution-config --id "$CF_ID" \
+              --query 'DistributionConfig' --output json 2>/dev/null || echo "")
+            if [ -n "$CONFIG" ] && [ -n "$ETAG" ]; then
+              DISABLED=$(echo "$CONFIG" | python3 -c "
+          import sys,json
+          cfg=json.load(sys.stdin)
+          cfg['Enabled']=False
+          print(json.dumps(cfg))
+          ")
+              aws cloudfront update-distribution \
+                --id "$CF_ID" \
+                --distribution-config "$DISABLED" \
+                --if-match "$ETAG" \
+                --region us-east-1 2>/dev/null || true
+              echo "  Waiting for CloudFront disable to propagate (~5 min)..."
+              aws cloudfront wait distribution-deployed --id "$CF_ID" 2>/dev/null || true
+              NEW_ETAG=$(aws cloudfront get-distribution --id "$CF_ID" \
+                --query 'ETag' --output text 2>/dev/null || echo "")
+              aws cloudfront delete-distribution \
+                --id "$CF_ID" --if-match "$NEW_ETAG" 2>/dev/null || true
+              echo "  ✅ CloudFront distribution deleted"
+            fi
+          else
+            echo "  No CloudFront distribution found — skipping"
+          fi
+
+          # ── 7. ALB, Listeners & Target Groups ───────────────────
+          echo "--- [7] Deleting ALB ---"
           ALB_ARN=$(aws elbv2 describe-load-balancers --names ${P}-alb \
             --query 'LoadBalancers[0].LoadBalancerArn' --output text --region $R 2>/dev/null || echo "")
           if [ -n "$ALB_ARN" ] && [ "$ALB_ARN" != "None" ]; then
@@ -53,95 +121,179 @@ jobs:
             aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $R || true
           fi
 
-          # ── 3. RDS Instance (Delete & Wait) ────────────────
-          echo "Deleting RDS instance (initiating delete)..."
+          # ── 8. RDS Instance ─────────────────────────────────────
+          echo "--- [8] Deleting RDS instance ---"
           aws rds delete-db-instance \
             --db-instance-identifier ${P}-db \
             --skip-final-snapshot \
             --delete-automated-backups \
             --region $R 2>/dev/null || true
 
-          # ── 4. ECR Repositories ────────────────────────────
-          echo "Deleting ECR repositories..."
+          # ── 9. ECR Repositories ─────────────────────────────────
+          echo "--- [9] Deleting ECR repositories ---"
           for repo in ${P}-eureka-server ${P}-frontend ${P}-api-gateway \
             ${P}-auth-service ${P}-ticket-service ${P}-comment-service \
             ${P}-attachment-service ${P}-dashboard-service; do
             aws ecr delete-repository --repository-name "$repo" --force --region $R 2>/dev/null || true
           done
 
-          # ── 5. CloudWatch Log Group ────────────────────────
-          echo "Deleting CloudWatch log group..."
+          # ── 10. CloudWatch Log Groups ───────────────────────────
+          echo "--- [10] Deleting CloudWatch log groups ---"
           aws logs delete-log-group --log-group-name "/ecs/${P}" --region $R 2>/dev/null || true
+          aws logs delete-log-group --log-group-name "/aws/lambda/${P}-s3-attachment-processor" --region $R 2>/dev/null || true
 
-          # ── 6. Secrets Manager ─────────────────────────────
-          echo "Deleting Secrets Manager secret..."
+          # ── 11. Secrets Manager ─────────────────────────────────
+          echo "--- [11] Deleting Secrets Manager secret ---"
           aws secretsmanager delete-secret --secret-id ${P}-db-credentials-v2 \
             --force-delete-without-recovery --region $R 2>/dev/null || true
 
-          # ── 7. S3 Buckets ──────────────────────────────────
-          echo "Emptying and deleting S3 buckets..."
-          BUCKETS=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, '${P}')].Name" --output text 2>/dev/null || echo "")
+          # ── 12. S3 Buckets (frontend + attachments + tfstate) ───
+          echo "--- [12] Emptying and deleting S3 buckets ---"
+          BUCKETS=$(aws s3api list-buckets \
+            --query "Buckets[?starts_with(Name, '${P}') || Name=='ticketdesk-tfstate'].Name" \
+            --output text 2>/dev/null || echo "")
           for b in $BUCKETS; do
             [ -z "$b" ] || [ "$b" == "None" ] && continue
+            echo "  Emptying s3://$b ..."
             aws s3 rm "s3://$b" --recursive 2>/dev/null || true
-            VERSIONS=$(aws s3api list-object-versions --bucket "$b" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null || echo "")
-            MARKERS=$(aws s3api list-object-versions --bucket "$b" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null || echo "")
-            [ -n "$VERSIONS" ] && [ "$VERSIONS" != "null" ] && aws s3api delete-objects --bucket "$b" --delete "$VERSIONS" 2>/dev/null || true
-            [ -n "$MARKERS" ] && [ "$MARKERS" != "null" ] && aws s3api delete-objects --bucket "$b" --delete "$MARKERS" 2>/dev/null || true
+            VERSIONS=$(aws s3api list-object-versions --bucket "$b" \
+              --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+              --output json 2>/dev/null || echo "")
+            MARKERS=$(aws s3api list-object-versions --bucket "$b" \
+              --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
+              --output json 2>/dev/null || echo "")
+            [ -n "$VERSIONS" ] && [ "$VERSIONS" != "null" ] && \
+              aws s3api delete-objects --bucket "$b" --delete "$VERSIONS" 2>/dev/null || true
+            [ -n "$MARKERS" ] && [ "$MARKERS" != "null" ] && \
+              aws s3api delete-objects --bucket "$b" --delete "$MARKERS" 2>/dev/null || true
             aws s3api delete-bucket --bucket "$b" --region $R 2>/dev/null || true
+            echo "  ✅ Deleted s3://$b"
           done
 
-          # ── 8. Wait for ALB and RDS deletion to complete ──
-          echo "⏳ Waiting for ALB and RDS instance to be fully deleted..."
+          # ── 13. Wait for ALB and RDS deletion ──────────────────
+          echo "--- [13] Waiting for ALB and RDS to be fully deleted ---"
           aws elbv2 wait load-balancers-deleted --names ${P}-alb --region $R 2>/dev/null || true
           aws rds wait db-instance-deleted --db-instance-identifier ${P}-db --region $R 2>/dev/null || true
-          echo "ALB and RDS instance are fully deleted!"
+          echo "  ✅ ALB and RDS fully deleted"
 
-          # ── 9. Delete RDS Subnet Group ─────────────────────
-          echo "Deleting RDS subnet group..."
-          aws rds delete-db-subnet-group --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
+          # ── 14. RDS Subnet Group ────────────────────────────────
+          echo "--- [14] Deleting RDS subnet group ---"
+          aws rds delete-db-subnet-group \
+            --db-subnet-group-name ${P}-db-subnet-group --region $R 2>/dev/null || true
 
-          # ── 10. IAM Roles ──────────────────────────────────
-          echo "Deleting IAM roles..."
-          for role in ${P}-ecs-execution-role ${P}-ecs-task-role; do
-            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
-            for p in $POLICIES; do
-              aws iam detach-role-policy --role-name "$role" --policy-arn "$p" 2>/dev/null || true
+          # ── 15. IAM Roles (ECS + Lambda) ────────────────────────
+          echo "--- [15] Deleting IAM roles ---"
+          for role in ${P}-ecs-execution-role ${P}-ecs-task-role ${P}-lambda-exec-role; do
+            # Detach managed policies
+            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" \
+              --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || echo "")
+            for pol in $POLICIES; do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$pol" 2>/dev/null || true
+            done
+            # Delete inline policies
+            INLINE=$(aws iam list-role-policies --role-name "$role" \
+              --query 'PolicyNames' --output text 2>/dev/null || echo "")
+            for ipol in $INLINE; do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$ipol" 2>/dev/null || true
             done
             aws iam delete-role --role-name "$role" 2>/dev/null || true
+            echo "  Deleted role: $role"
           done
 
-          # ── 11. ALB Target Groups ──────────────────────────
-          echo "Deleting target groups..."
+          # ── 16. ALB Target Groups ───────────────────────────────
+          echo "--- [16] Deleting target groups ---"
           for tg in ${P}-eureka-tg ${P}-gateway-tg; do
-            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" --query 'TargetGroups[0].TargetGroupArn' --output text --region $R 2>/dev/null || echo "")
-            [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $R 2>/dev/null || true
+            TG_ARN=$(aws elbv2 describe-target-groups --names "$tg" \
+              --query 'TargetGroups[0].TargetGroupArn' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$TG_ARN" ] && [ "$TG_ARN" != "None" ] && \
+              aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $R 2>/dev/null || true
           done
 
-          # ── 12. Security Groups ────────────────────────────
-          echo "Deleting security groups..."
+          # ── 17. DynamoDB Terraform Lock Table ───────────────────
+          echo "--- [17] Deleting Terraform lock DynamoDB table ---"
+          aws dynamodb delete-table \
+            --table-name ticketdesk-tflock \
+            --region $R 2>/dev/null || true
+
+          # ── 18. NAT Gateway & Elastic IP ────────────────────────
+          echo "--- [18] Deleting NAT Gateway and Elastic IP ---"
+          NAT_ID=$(aws ec2 describe-nat-gateways \
+            --filter "Name=tag:Name,Values=${P}-nat-gw" "Name=state,Values=available" \
+            --query 'NatGateways[0].NatGatewayId' --output text --region $R 2>/dev/null || echo "")
+          if [ -n "$NAT_ID" ] && [ "$NAT_ID" != "None" ]; then
+            aws ec2 delete-nat-gateway --nat-gateway-id "$NAT_ID" --region $R 2>/dev/null || true
+            echo "  Waiting for NAT Gateway deletion (~60s)..."
+            aws ec2 wait nat-gateway-deleted --nat-gateway-ids "$NAT_ID" --region $R 2>/dev/null || sleep 60
+            echo "  ✅ NAT Gateway deleted"
+          fi
+          EIP_ALLOC=$(aws ec2 describe-addresses \
+            --filters "Name=tag:Name,Values=${P}-nat-eip" \
+            --query 'Addresses[0].AllocationId' --output text --region $R 2>/dev/null || echo "")
+          if [ -n "$EIP_ALLOC" ] && [ "$EIP_ALLOC" != "None" ]; then
+            aws ec2 release-address --allocation-id "$EIP_ALLOC" --region $R 2>/dev/null || true
+            echo "  ✅ Elastic IP released"
+          fi
+
+          # ── 19. Security Groups ─────────────────────────────────
+          echo "--- [19] Deleting security groups ---"
           for sg in ${P}-alb-sg ${P}-ecs-tasks-sg ${P}-rds-sg; do
-            SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$sg" --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
-            [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && aws ec2 delete-security-group --group-id "$SG_ID" --region $R 2>/dev/null || true
+            SG_ID=$(aws ec2 describe-security-groups \
+              --filters "Name=group-name,Values=$sg" \
+              --query 'SecurityGroups[0].GroupId' --output text --region $R 2>/dev/null || echo "")
+            [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && \
+              aws ec2 delete-security-group --group-id "$SG_ID" --region $R 2>/dev/null || true
           done
 
-          # ── 13. VPCs ───────────────────────────────────────
-          echo "Deleting non-default VPCs..."
-          VPCS=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region $R 2>/dev/null || echo "")
+          # ── 20. VPC (subnets, IGW, route tables) ────────────────
+          echo "--- [20] Deleting VPCs ---"
+          VPCS=$(aws ec2 describe-vpcs \
+            --query 'Vpcs[?IsDefault==`false`].VpcId' --output text --region $R 2>/dev/null || echo "")
           for vpc in $VPCS; do
             [ -z "$vpc" ] || [ "$vpc" == "None" ] && continue
-            SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc" --query 'Subnets[*].SubnetId' --output text --region $R 2>/dev/null || echo "")
-            for sn in $SUBNETS; do aws ec2 delete-subnet --subnet-id "$sn" --region $R 2>/dev/null || true; done
-            IGW=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc" --query 'InternetGateways[0].InternetGatewayId' --output text --region $R 2>/dev/null || echo "")
+            echo "  Cleaning VPC: $vpc"
+            SUBNETS=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=$vpc" \
+              --query 'Subnets[*].SubnetId' --output text --region $R 2>/dev/null || echo "")
+            for sn in $SUBNETS; do
+              aws ec2 delete-subnet --subnet-id "$sn" --region $R 2>/dev/null || true
+            done
+            IGW=$(aws ec2 describe-internet-gateways \
+              --filters "Name=attachment.vpc-id,Values=$vpc" \
+              --query 'InternetGateways[0].InternetGatewayId' --output text --region $R 2>/dev/null || echo "")
             if [ -n "$IGW" ] && [ "$IGW" != "None" ]; then
               aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$vpc" --region $R 2>/dev/null || true
               aws ec2 delete-internet-gateway --internet-gateway-id "$IGW" --region $R 2>/dev/null || true
             fi
-            RTS=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc" --query 'RouteTables[?Associations[?Main!=`true`]].RouteTableId' --output text --region $R 2>/dev/null || echo "")
-            for rt in $RTS; do aws ec2 delete-route-table --route-table-id "$rt" --region $R 2>/dev/null || true; done
+            RTS=$(aws ec2 describe-route-tables \
+              --filters "Name=vpc-id,Values=$vpc" \
+              --query 'RouteTables[?Associations[?Main!=`true`]].RouteTableId' \
+              --output text --region $R 2>/dev/null || echo "")
+            for rt in $RTS; do
+              aws ec2 delete-route-table --route-table-id "$rt" --region $R 2>/dev/null || true
+            done
             aws ec2 delete-vpc --vpc-id "$vpc" --region $R 2>/dev/null || true
+            echo "  ✅ VPC $vpc deleted"
           done
 
           echo "======================================================"
-          echo " 🎉 ALL AWS RESOURCES HAVE BEEN FORCE DELETED SUCCESSFULLY!"
+          echo " 🎉 ALL AWS RESOURCES DESTROYED SUCCESSFULLY!"
+          echo "======================================================"
+          echo " Resources deleted:"
+          echo "  ✅ ECS services + cluster"
+          echo "  ✅ Lambda (s3-attachment-processor)"
+          echo "  ✅ CloudWatch alarms (CPU, Memory, 5xx)"
+          echo "  ✅ SNS alerts topic"
+          echo "  ✅ SSM Parameters (7 params)"
+          echo "  ✅ CloudFront distribution"
+          echo "  ✅ ALB + listeners + target groups"
+          echo "  ✅ RDS MySQL instance"
+          echo "  ✅ ECR repositories (8)"
+          echo "  ✅ CloudWatch log groups (ECS + Lambda)"
+          echo "  ✅ Secrets Manager secret"
+          echo "  ✅ S3 buckets (frontend + attachments + tfstate)"
+          echo "  ✅ DynamoDB Terraform lock table"
+          echo "  ✅ NAT Gateway + Elastic IP"
+          echo "  ✅ IAM roles (ECS exec + task + Lambda)"
+          echo "  ✅ Security groups"
+          echo "  ✅ VPC + subnets + IGW + route tables"
           echo "======================================================"
