@@ -661,4 +661,5 @@ Destroy complete! Resources: 79 destroyed.
   * Built Stage 6 (Smoke Tests) with automated curl health check assertions (`/actuator/health` and `/api/v1/auth/login`).
   * Designed and executed document upload QA verification suite testing presigned URL uploads and Lambda RDS metadata ingestion.
 
-<!-- TicketDesk POC Capstone Report - Verified August 2026 -->
+<!-- TicketDesk POC Capstone Report - Verified August 2026 This project contains the TicketDesk application with backend,
+frontend, and infrastructure configuration. -->
